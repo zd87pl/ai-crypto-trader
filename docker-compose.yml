@@ -1,0 +1,150 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:alpine
+    container_name: crypto-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - crypto-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+  market-monitor:
+    build: .
+    container_name: crypto-market-monitor
+    command: python3 services/market_monitor_service.py
+    environment:
+      - BINANCE_API_KEY=${BINANCE_API_KEY}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - SERVICE_PORT=${MARKET_MONITOR_PORT}
+    ports:
+      - "${MARKET_MONITOR_PORT}:${MARKET_MONITOR_PORT}"
+    volumes:
+      - ./config.json:/app/config.json
+      - ./logs:/app/logs
+      - ./data:/app/data
+    networks:
+      - crypto-net
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; socket.socket().connect(('localhost', ${MARKET_MONITOR_PORT}))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  trade-executor:
+    build: .
+    container_name: crypto-trade-executor
+    command: python3 services/trade_executor_service.py
+    environment:
+      - BINANCE_API_KEY=${BINANCE_API_KEY}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - SERVICE_PORT=${TRADE_EXECUTOR_PORT}
+    ports:
+      - "${TRADE_EXECUTOR_PORT}:${TRADE_EXECUTOR_PORT}"
+    volumes:
+      - ./config.json:/app/config.json
+      - ./logs:/app/logs
+      - ./data:/app/data
+    networks:
+      - crypto-net
+    depends_on:
+      redis:
+        condition: service_healthy
+      market-monitor:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; socket.socket().connect(('localhost', ${TRADE_EXECUTOR_PORT}))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  ai-analyzer:
+    build: .
+    container_name: crypto-ai-analyzer
+    command: python3 services/ai_analyzer_service.py
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - SERVICE_PORT=${AI_ANALYZER_PORT}
+    ports:
+      - "${AI_ANALYZER_PORT}:${AI_ANALYZER_PORT}"
+    volumes:
+      - ./config.json:/app/config.json
+      - ./logs:/app/logs
+      - ./data:/app/data
+    networks:
+      - crypto-net
+    depends_on:
+      redis:
+        condition: service_healthy
+      market-monitor:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; socket.socket().connect(('localhost', ${AI_ANALYZER_PORT}))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  strategy-evolution:
+    build: .
+    container_name: crypto-strategy-evolution
+    command: python3 services/strategy_evolution_service.py
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+      - CLOUDFLARE_ACCOUNT_ID=${CLOUDFLARE_ACCOUNT_ID}
+      - CLOUDFLARE_ZONE_ID=${CLOUDFLARE_ZONE_ID}
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - SERVICE_PORT=${STRATEGY_EVOLUTION_PORT}
+    ports:
+      - "${STRATEGY_EVOLUTION_PORT}:${STRATEGY_EVOLUTION_PORT}"
+    volumes:
+      - ./config.json:/app/config.json
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./strategies:/app/strategies
+    networks:
+      - crypto-net
+    depends_on:
+      redis:
+        condition: service_healthy
+      market-monitor:
+        condition: service_healthy
+      ai-analyzer:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; socket.socket().connect(('localhost', ${STRATEGY_EVOLUTION_PORT}))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+networks:
+  crypto-net:
+    driver: bridge
+
+volumes:
+  redis-data:
+  logs:
+  data:
+  strategies:

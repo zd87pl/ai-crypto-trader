@@ -1,0 +1,126 @@
+{
+    "trading_params": {
+        "min_volume_usdc": 100000,
+        "position_size": 0.15,
+        "max_positions": 5,
+        "stop_loss_pct": 2,
+        "take_profit_pct": 4,
+        "min_trade_amount": 100
+    },
+    "openai": {
+        "model": "gpt-4",
+        "temperature": 0.7,
+        "max_tokens": 2000,
+        "analysis_prompt": "Analyze the market conditions for {symbol} with current price ${price:.2f}, 24h volume ${volume:.2f}, and price change {price_change:.2f}%",
+        "risk_prompt": "Analyze risk for {symbol} with ${available_capital:.2f} available capital, volatility {volatility:.2f}, and trend strength {trend_strength:.2f}",
+        "market_prompt": "Analyze overall market conditions based on the following data:\n\n{market_data}"
+    },
+    "evolution": {
+        "min_sharpe_ratio": 1.5,
+        "max_drawdown": 15.0,
+        "min_win_rate": 0.55,
+        "min_profit_factor": 1.3,
+        "improvement_threshold": 0.1,
+        "max_iterations": 10,
+        "convergence_criteria": 0.02,
+        "strategy_types": [
+            "mean_reversion",
+            "trend_following",
+            "breakout",
+            "momentum",
+            "statistical_arbitrage"
+        ],
+        "timeframes": [
+            "1m",
+            "5m",
+            "15m",
+            "1h",
+            "4h"
+        ],
+        "worker_templates": {
+            "base": {
+                "memory_limit": "128MB",
+                "cpu_limit": "10ms",
+                "timeout": 10000
+            },
+            "backtest": {
+                "memory_limit": "256MB",
+                "cpu_limit": "50ms",
+                "timeout": 30000
+            }
+        },
+        "strategy_prompt_template": {
+            "system": "You are an expert algorithmic trader specializing in cryptocurrency markets. Create a complete trading strategy that maximizes profit while managing risk effectively.",
+            "strategy_requirements": [
+                "Must include proper risk management",
+                "Must handle error conditions gracefully",
+                "Must include position sizing logic",
+                "Must implement stop-loss and take-profit mechanisms",
+                "Must include performance monitoring"
+            ],
+            "code_requirements": [
+                "Must be compatible with Cloudflare Workers",
+                "Must be memory efficient",
+                "Must handle API rate limits",
+                "Must include proper error handling",
+                "Must be stateless"
+            ]
+        },
+        "performance_metrics": {
+            "required": [
+                "sharpe_ratio",
+                "sortino_ratio",
+                "max_drawdown",
+                "win_rate",
+                "profit_factor",
+                "average_trade",
+                "total_trades",
+                "profit_loss"
+            ],
+            "optional": [
+                "calmar_ratio",
+                "omega_ratio",
+                "recovery_factor",
+                "risk_reward_ratio",
+                "expectancy"
+            ]
+        },
+        "risk_management": {
+            "max_position_size": 0.1,
+            "max_open_positions": 5,
+            "max_daily_drawdown": 0.05,
+            "max_correlation": 0.7,
+            "min_liquidity": 1000000
+        },
+        "optimization_goals": {
+            "primary": "sharpe_ratio",
+            "secondary": [
+                "max_drawdown",
+                "win_rate",
+                "profit_factor"
+            ],
+            "constraints": {
+                "min_trades_per_day": 5,
+                "max_trades_per_day": 50,
+                "min_holding_period": "5m",
+                "max_holding_period": "24h"
+            }
+        }
+    },
+    "worker_defaults": {
+        "routes": {
+            "strategy": "/api/strategy/*",
+            "monitor": "/api/monitor/*",
+            "backtest": "/api/backtest/*"
+        },
+        "headers": {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type"
+        },
+        "caching": {
+            "browser_ttl": 0,
+            "edge_ttl": 30
+        }
+    }
+}
