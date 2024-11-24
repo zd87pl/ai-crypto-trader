@@ -43,6 +43,13 @@ class MarketMonitorService:
         self.running = True
         self.ws_url = "wss://stream.binance.com:9443/ws/!miniTicker@arr"
         self.health_check_port = int(os.getenv('MARKET_MONITOR_PORT', 8001))
+        
+        # Rate limiting settings
+        self.update_interval = 15  # Minimum seconds between updates for each symbol
+        self.last_update_time = {}  # Track last update time for each symbol
+        self.batch_size = 3  # Number of symbols to process in each batch
+        self.batch_interval = 5  # Seconds between processing batches
+        self.pending_updates = asyncio.Queue()  # Queue for pending market updates
 
     async def connect_redis(self, max_retries=5, retry_delay=5):
         """Establish Redis connection with retries"""
@@ -70,6 +77,12 @@ class MarketMonitorService:
     def get_historical_data(self, symbol):
         """Get historical klines/candlestick data"""
         try:
+            # Check if we have cached data that's still valid
+            if symbol in self.historical_data:
+                last_update = self.historical_data[symbol]['timestamp']
+                if (datetime.now() - last_update).total_seconds() < 300:  # Cache for 5 minutes
+                    return self.historical_data[symbol]['data']
+
             klines = self.client.get_klines(
                 symbol=symbol,
                 interval='5m',  # 5-minute candles
@@ -89,6 +102,12 @@ class MarketMonitorService:
             numeric_columns = ['open', 'high', 'low', 'close', 'volume', 'quote_volume']
             for col in numeric_columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+            # Cache the data
+            self.historical_data[symbol] = {
+                'data': df,
+                'timestamp': datetime.now()
+            }
             
             return df
         except Exception as e:
@@ -160,83 +179,129 @@ class MarketMonitorService:
             return None
 
     async def process_market_data(self, msg):
-        """Process incoming market data and publish to Redis"""
+        """Process incoming market data and queue updates"""
         try:
-            if not self.redis or not await self.redis.ping():
-                if not await self.connect_redis():
-                    return
-
             data = json.loads(msg)
             if not isinstance(data, list):
                 return
 
+            current_time = datetime.now()
+            
             for ticker in data:
                 if not isinstance(ticker, dict) or 's' not in ticker:
                     continue
 
                 symbol = ticker['s']
-                if symbol.endswith('USDC'):
-                    # Process market data
-                    price = float(ticker['c'])
-                    volume = float(ticker['v']) * price
-                    price_change = ((price - float(ticker['o'])) / float(ticker['o'])) * 100
+                if not symbol.endswith('USDC'):
+                    continue
 
-                    # Get historical data and calculate indicators
-                    df = self.get_historical_data(symbol)
-                    if df is not None:
-                        indicators = self.calculate_technical_indicators(df)
-                        if indicators:
-                            # Create complete market update
-                            market_update = {
-                                'symbol': symbol,
-                                'current_price': price,
-                                'avg_volume': volume,
-                                'price_change': price_change,
-                                'timestamp': datetime.now().isoformat(),
-                                'rsi': indicators['rsi'],
-                                'stoch_k': indicators['stoch_k'],
-                                'macd': indicators['macd'],
-                                'williams_r': indicators['williams_r'],
-                                'bb_position': indicators['bb_position'],
-                                'trend': indicators['trend'],
-                                'trend_strength': indicators['trend_strength'],
-                                'price_change_5m': price_change,  # Using current price change as 5m for now
-                                'price_change_15m': price_change * 3  # Approximating 15m change
-                            }
+                # Check if we should update this symbol based on the interval
+                last_update = self.last_update_time.get(symbol, datetime.min)
+                if (current_time - last_update).total_seconds() < self.update_interval:
+                    continue
 
-                            # Store in local cache
-                            self.market_data[symbol] = market_update
-
-                            # Log market update before publishing
-                            logger.debug(f"Publishing market update to Redis: {json.dumps(market_update)}")
-
-                            # Publish to Redis
-                            await self.redis.publish(
-                                'market_updates',
-                                json.dumps(market_update)
-                            )
-
-                            # Store latest data in Redis
-                            await self.redis.hset(
-                                'current_prices',
-                                symbol,
-                                json.dumps(market_update)
-                            )
-
-                            logger.info(f"Market update - {symbol}: ${price:.8f} (24h volume: ${volume:.2f}, RSI: {indicators['rsi']:.2f})")
-
-                            # Check for trading opportunities
-                            if abs(price_change) >= self.config['trading_params'].get('min_price_change_pct', 1.0) and \
-                               volume >= self.config['trading_params']['min_volume_usdc']:
-                                await self.redis.publish(
-                                    'trading_opportunities',
-                                    json.dumps(market_update)
-                                )
-                                logger.info(f"Found opportunity: {symbol} at ${price:.8f} (change: {price_change:.2f}%)")
+                # Queue the ticker data for processing
+                await self.pending_updates.put((symbol, ticker))
 
         except Exception as e:
             logger.error(f"Error processing market data: {str(e)}")
             logger.error(f"Message content: {msg}")
+
+    async def process_pending_updates(self):
+        """Process pending market updates in batches"""
+        while self.running:
+            try:
+                if not self.redis or not await self.redis.ping():
+                    if not await self.connect_redis():
+                        await asyncio.sleep(5)
+                        continue
+
+                # Process a batch of updates
+                batch = []
+                try:
+                    for _ in range(self.batch_size):
+                        if self.pending_updates.empty():
+                            break
+                        batch.append(await self.pending_updates.get())
+                except asyncio.QueueEmpty:
+                    pass
+
+                if not batch:
+                    await asyncio.sleep(1)
+                    continue
+
+                current_time = datetime.now()
+
+                for symbol, ticker in batch:
+                    try:
+                        # Process market data
+                        price = float(ticker['c'])
+                        volume = float(ticker['v']) * price
+                        price_change = ((price - float(ticker['o'])) / float(ticker['o'])) * 100
+
+                        # Get historical data and calculate indicators
+                        df = self.get_historical_data(symbol)
+                        if df is not None:
+                            indicators = self.calculate_technical_indicators(df)
+                            if indicators:
+                                # Create complete market update
+                                market_update = {
+                                    'symbol': symbol,
+                                    'current_price': price,
+                                    'avg_volume': volume,
+                                    'price_change': price_change,
+                                    'timestamp': current_time.isoformat(),
+                                    'rsi': indicators['rsi'],
+                                    'stoch_k': indicators['stoch_k'],
+                                    'macd': indicators['macd'],
+                                    'williams_r': indicators['williams_r'],
+                                    'bb_position': indicators['bb_position'],
+                                    'trend': indicators['trend'],
+                                    'trend_strength': indicators['trend_strength'],
+                                    'price_change_5m': price_change,
+                                    'price_change_15m': price_change * 3
+                                }
+
+                                # Store in local cache
+                                self.market_data[symbol] = market_update
+                                self.last_update_time[symbol] = current_time
+
+                                # Log market update before publishing
+                                logger.debug(f"Publishing market update to Redis: {json.dumps(market_update)}")
+
+                                # Publish to Redis
+                                await self.redis.publish(
+                                    'market_updates',
+                                    json.dumps(market_update)
+                                )
+
+                                # Store latest data in Redis
+                                await self.redis.hset(
+                                    'current_prices',
+                                    symbol,
+                                    json.dumps(market_update)
+                                )
+
+                                logger.info(f"Market update - {symbol}: ${price:.8f} (24h volume: ${volume:.2f}, RSI: {indicators['rsi']:.2f})")
+
+                                # Check for trading opportunities
+                                if abs(price_change) >= self.config['trading_params'].get('min_price_change_pct', 1.0) and \
+                                   volume >= self.config['trading_params']['min_volume_usdc']:
+                                    await self.redis.publish(
+                                        'trading_opportunities',
+                                        json.dumps(market_update)
+                                    )
+                                    logger.info(f"Found opportunity: {symbol} at ${price:.8f} (change: {price_change:.2f}%)")
+
+                    except Exception as e:
+                        logger.error(f"Error processing update for {symbol}: {str(e)}")
+
+                # Wait between batches
+                await asyncio.sleep(self.batch_interval)
+
+            except Exception as e:
+                logger.error(f"Error in process_pending_updates: {str(e)}")
+                await asyncio.sleep(5)
 
     async def maintain_redis(self):
         """Maintain Redis connection"""
@@ -304,11 +369,12 @@ class MarketMonitorService:
             if not await self.connect_redis():
                 raise Exception("Failed to establish initial Redis connection")
             
-            # Create tasks for WebSocket, Redis maintenance, and health check server
+            # Create tasks for WebSocket, Redis maintenance, health check server, and update processing
             tasks = [
                 asyncio.create_task(self.websocket_handler()),
                 asyncio.create_task(self.maintain_redis()),
-                asyncio.create_task(self.health_check_server())
+                asyncio.create_task(self.health_check_server()),
+                asyncio.create_task(self.process_pending_updates())
             ]
             
             # Wait for tasks to complete
