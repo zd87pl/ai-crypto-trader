@@ -39,41 +39,99 @@ class AIAnalyzerService:
         self.ai_trader = AITrader(self.config)  # Instantiate AITrader
         logger.debug("AITrader initialized successfully")
 
+        # Redis configuration
+        self.redis_host = os.getenv('REDIS_HOST', 'redis')
+        self.redis_port = int(os.getenv('REDIS_PORT', 6379))
+        logger.debug(f"Redis configuration - Host: {self.redis_host}, Port: {self.redis_port}")
+
         # Redis will be initialized in connect_redis
         self.redis = None
         self.pubsub = None
         self.running = True
         self.market_data = {}
         self.last_analysis_time = {}
-        self.health_check_port = int(os.getenv('SERVICE_PORT', 8002))
+        
+        # Get service port from environment variable
+        self.service_port = int(os.getenv('SERVICE_PORT', 8003))  # Default to 8003 (AI_ANALYZER_PORT)
+        logger.debug(f"Service port configured as: {self.service_port}")
         logger.debug("AI Analyzer Service initialization complete")
 
-    async def connect_redis(self, max_retries=5, retry_delay=5):
+    async def connect_redis(self, max_retries=10, retry_delay=5):
         """Establish Redis connection with retries"""
         retries = 0
-        while retries < max_retries:
+        while retries < max_retries and self.running:
             try:
                 if self.redis is None:
                     logger.debug(f"Attempting Redis connection (attempt {retries + 1}/{max_retries})")
-                    redis_host = os.getenv('REDIS_HOST', 'redis')
-                    redis_port = int(os.getenv('REDIS_PORT', 6379))
-                    logger.debug(f"Connecting to Redis at {redis_host}:{redis_port}")
                     self.redis = Redis(
-                        host=redis_host,
-                        port=redis_port,
-                        decode_responses=True
+                        host=self.redis_host,
+                        port=self.redis_port,
+                        decode_responses=True,
+                        socket_connect_timeout=5.0,
+                        socket_keepalive=True,
+                        health_check_interval=15
                     )
                 await self.redis.ping()
-                logger.info("Successfully connected to Redis")
+                logger.info(f"Successfully connected to Redis at {self.redis_host}:{self.redis_port}")
                 return True
-            except (ConnectionError, Exception) as e:
+            except (ConnectionError, OSError) as e:
                 retries += 1
                 logger.error(f"Failed to connect to Redis (attempt {retries}/{max_retries}): {str(e)}")
+                if self.redis:
+                    await self.redis.close()
+                    self.redis = None
                 if retries < max_retries:
                     await asyncio.sleep(retry_delay)
                 else:
                     logger.error("Max retries reached. Could not connect to Redis.")
                     return False
+            except Exception as e:
+                logger.error(f"Unexpected error connecting to Redis: {str(e)}")
+                if self.redis:
+                    await self.redis.close()
+                    self.redis = None
+                await asyncio.sleep(retry_delay)
+                retries += 1
+
+    async def setup_pubsub(self):
+        """Set up Redis pubsub connection"""
+        try:
+            # Verify Redis connection
+            if not self.redis or not await self.redis.ping():
+                logger.error("Redis connection not available for pubsub setup")
+                return False
+
+            # Close existing pubsub if any
+            if self.pubsub:
+                logger.debug("Closing existing pubsub connection")
+                await self.pubsub.close()
+                self.pubsub = None
+
+            # Create new pubsub instance
+            logger.debug("Creating new pubsub instance")
+            self.pubsub = self.redis.pubsub()
+            
+            # Subscribe to channel
+            logger.debug("Subscribing to market_updates channel")
+            await self.pubsub.subscribe('market_updates')
+            
+            # Get first message to confirm subscription
+            logger.debug("Waiting for subscription confirmation message")
+            message = await self.pubsub.get_message(timeout=1.0)
+            
+            if message and message['type'] == 'subscribe':
+                logger.info("Successfully subscribed to market_updates channel")
+                return True
+            else:
+                logger.error(f"Unexpected subscription response: {message}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error in pubsub setup: {str(e)}", exc_info=True)
+            if self.pubsub:
+                await self.pubsub.close()
+                self.pubsub = None
+            return False
 
     async def analyze_market_data(self, market_update):
         """Analyze market data using AITrader"""
@@ -138,70 +196,69 @@ class AIAnalyzerService:
         except Exception as e:
             logger.error(f"Error in AI analysis: {str(e)}", exc_info=True)
 
-    async def setup_pubsub(self):
-        """Set up Redis pubsub connection"""
-        try:
-            if self.redis and await self.redis.ping():
-                if self.pubsub:
-                    await self.pubsub.close()
-                logger.debug("Setting up Redis pubsub...")
-                self.pubsub = self.redis.pubsub()
-                await self.pubsub.subscribe('market_updates')
-                logger.info("Successfully subscribed to market_updates channel")
-                return True
-            return False
-        except Exception as e:
-            logger.error(f"Error setting up pubsub: {str(e)}")
-            return False
-
     async def process_market_updates(self):
         """Process market updates from Redis"""
         logger.debug("Starting market updates processing...")
+        pubsub_retry_count = 0
+        max_pubsub_retries = 10
+        
         while self.running:
             try:
-                # Ensure Redis connection and pubsub are set up
+                # Ensure Redis connection
                 if not self.redis or not await self.redis.ping():
                     logger.debug("Redis connection not available, attempting to connect...")
                     if not await self.connect_redis():
                         await asyncio.sleep(5)
                         continue
 
-                if not self.pubsub or not await self.setup_pubsub():
-                    logger.debug("Pubsub not available, attempting to set up...")
-                    await asyncio.sleep(5)
-                    continue
+                # Setup pubsub if needed
+                if not self.pubsub:
+                    logger.debug(f"Setting up pubsub (attempt {pubsub_retry_count + 1}/{max_pubsub_retries})")
+                    if await self.setup_pubsub():
+                        logger.info("Pubsub setup successful")
+                        pubsub_retry_count = 0  # Reset counter on success
+                    else:
+                        pubsub_retry_count += 1
+                        if pubsub_retry_count >= max_pubsub_retries:
+                            logger.error("Max pubsub retry attempts reached")
+                            raise Exception("Failed to set up pubsub after maximum retries")
+                        await asyncio.sleep(5)
+                        continue
 
-                # Process any messages in the pubsub channel
-                logger.debug("Waiting for message from Redis...")
-                message = await self.pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
-                
-                if message:
-                    logger.debug(f"Received message type: {message['type']}")
-                    if message['type'] == 'message':
-                        try:
-                            logger.debug(f"Raw message data: {message['data']}")
-                            market_update = json.loads(message['data'])
-                            logger.info(f"Processing market update for {market_update['symbol']}")
-                            await self.analyze_market_data(market_update)
-                        except json.JSONDecodeError as e:
-                            logger.error(f"Failed to parse market update: {e}")
-                            logger.error(f"Invalid JSON data: {message['data']}")
-                        except KeyError as e:
-                            logger.error(f"Missing required field in market update: {e}")
-                            logger.error(f"Market update data: {market_update}")
-                        except Exception as e:
-                            logger.error(f"Error processing market update: {e}", exc_info=True)
+                # Process messages
+                try:
+                    logger.debug("Waiting for message from Redis...")
+                    message = await self.pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                    
+                    if message:
+                        logger.debug(f"Received message type: {message['type']}")
+                        if message['type'] == 'message':
+                            try:
+                                logger.debug(f"Raw message data: {message['data']}")
+                                market_update = json.loads(message['data'])
+                                logger.info(f"Processing market update for {market_update['symbol']}")
+                                await self.analyze_market_data(market_update)
+                            except json.JSONDecodeError as e:
+                                logger.error(f"Failed to parse market update: {e}")
+                                logger.error(f"Invalid JSON data: {message['data']}")
+                            except KeyError as e:
+                                logger.error(f"Missing required field in market update: {e}")
+                                logger.error(f"Market update data: {market_update}")
+                            except Exception as e:
+                                logger.error(f"Error processing market update: {e}", exc_info=True)
+                except Exception as e:
+                    logger.error(f"Error getting message from pubsub: {str(e)}")
+                    self.pubsub = None  # Force pubsub reconnection
+                    continue
 
                 await asyncio.sleep(0.1)
 
             except Exception as e:
                 logger.error(f"Error in process_market_updates: {str(e)}", exc_info=True)
-                await asyncio.sleep(1)
-                # Reset connections on error
                 if self.pubsub:
                     await self.pubsub.close()
-                self.pubsub = None
-                continue
+                    self.pubsub = None
+                await asyncio.sleep(5)
 
     async def maintain_redis(self):
         """Maintain Redis connection"""
@@ -220,34 +277,38 @@ class AIAnalyzerService:
 
     async def health_check_server(self):
         """Run a simple TCP server for health checks"""
-        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        
         try:
-            server.bind(('0.0.0.0', self.health_check_port))
+            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server.bind(('0.0.0.0', self.service_port))
             server.listen(1)
             server.setblocking(False)
             
-            logger.info(f"Health check server listening on port {self.health_check_port}")
+            logger.info(f"Health check server listening on port {self.service_port}")
             
             while self.running:
                 try:
                     await asyncio.sleep(1)
-                    # The socket exists and is listening, which is enough for the Docker healthcheck
                 except Exception as e:
-                    logger.error(f"Health check server error: {str(e)}")
+                    logger.error(f"Health check server loop error: {str(e)}")
+                    break
+                    
         except Exception as e:
             logger.error(f"Failed to start health check server: {str(e)}")
+            raise  # Re-raise the exception to trigger service restart
         finally:
-            server.close()
+            try:
+                server.close()
+            except Exception:
+                pass
 
     async def run(self):
         """Run the AI analyzer service"""
         try:
             logger.info("Starting AI Analyzer Service...")
             
-            # First establish Redis connection
-            if not await self.connect_redis():
+            # First establish Redis connection with increased retries
+            if not await self.connect_redis(max_retries=15, retry_delay=2):
                 raise Exception("Failed to establish initial Redis connection")
             
             # Create tasks for market updates processing, Redis maintenance, and health check
