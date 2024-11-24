@@ -13,6 +13,10 @@ import pandas as pd
 from typing import Dict
 from binance_ml_strategy import CryptoScanner, TradingSignal, PositionSizer
 from ai_trader import AITrader
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Configure logging to output to the console
 logger.basicConfig(level=logger.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -661,24 +665,30 @@ class AutoTrader:
     def __init__(self, config_path: str = 'config.json'):
         """Initialize AutoTrader with configuration"""
         self.load_config(config_path)
-        self.client = Client(self.config['api_key'], self.config['api_secret'])
+        self.client = Client(os.getenv('BINANCE_API_KEY'), os.getenv('BINANCE_API_SECRET'))
         self.opportunity_queue = Queue()
         self.market_data = {}  # Shared market data
         self.initialize_trading_directory()
         self.running = True
         
         # Initialize shared ThreadedWebsocketManager
-        self.twm = ThreadedWebsocketManager(api_key=self.config['api_key'], api_secret=self.config['api_secret'])
+        self.twm = ThreadedWebsocketManager(api_key=os.getenv('BINANCE_API_KEY'), api_secret=os.getenv('BINANCE_API_SECRET'))
         
         # Initialize threads with shared ThreadedWebsocketManager
         self.market_monitor = MarketMonitor(self.client, self.config, self.opportunity_queue, self.market_data, self.twm)
         self.trade_executor = TradeExecutor(self.client, self.config, self.opportunity_queue, self.market_data, self.twm)
     
     def load_config(self, config_path: str):
-        """Load configuration from JSON file"""
+        """Load configuration from JSON file and merge with environment variables"""
         try:
             with open(config_path, 'r') as f:
                 self.config = json.load(f)
+            
+            # Add OpenAI API key from environment variables
+            if 'openai' not in self.config:
+                self.config['openai'] = {}
+            self.config['openai']['api_key'] = os.getenv('OPENAI_API_KEY')
+            
             logger.info("Configuration loaded successfully")
         except Exception as e:
             logger.error(f"Error loading configuration: {str(e)}")

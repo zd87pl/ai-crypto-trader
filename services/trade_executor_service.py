@@ -1,11 +1,12 @@
 import os
 import json
-import redis
 import asyncio
 from datetime import datetime
 from binance.client import Client
 from binance.enums import *
 import logging as logger
+from redis.asyncio import Redis
+from redis.exceptions import ConnectionError
 
 # Configure logging
 logger.basicConfig(
@@ -29,18 +30,37 @@ class TradeExecutorService:
             os.getenv('BINANCE_API_SECRET')
         )
 
-        # Initialize Redis connection
-        self.redis = redis.Redis(
-            host=os.getenv('REDIS_HOST', 'redis'),
-            port=int(os.getenv('REDIS_PORT', 6379)),
-            decode_responses=True
-        )
-
+        # Redis will be initialized in connect_redis
+        self.redis = None
+        self.pubsub = None
         self.running = True
         self.active_trades = {}
         self.symbol_info = {}
         self.available_usdc = 0.0
         self.load_trading_rules()
+
+    async def connect_redis(self, max_retries=5, retry_delay=5):
+        """Establish Redis connection with retries"""
+        retries = 0
+        while retries < max_retries:
+            try:
+                if self.redis is None:
+                    self.redis = Redis(
+                        host=os.getenv('REDIS_HOST', 'redis'),
+                        port=int(os.getenv('REDIS_PORT', 6379)),
+                        decode_responses=True
+                    )
+                await self.redis.ping()
+                logger.info("Successfully connected to Redis")
+                return True
+            except (ConnectionError, Exception) as e:
+                retries += 1
+                logger.error(f"Failed to connect to Redis (attempt {retries}/{max_retries}): {str(e)}")
+                if retries < max_retries:
+                    await asyncio.sleep(retry_delay)
+                else:
+                    logger.error("Max retries reached. Could not connect to Redis.")
+                    return False
 
     def load_trading_rules(self):
         """Load trading rules for all USDC pairs"""
@@ -251,14 +271,35 @@ class TradeExecutorService:
         except Exception as e:
             logger.error(f"Error in trade monitoring: {str(e)}")
 
+    async def setup_pubsub(self):
+        """Set up Redis pubsub connection"""
+        try:
+            if self.redis and await self.redis.ping():
+                if self.pubsub:
+                    await self.pubsub.close()
+                self.pubsub = self.redis.pubsub()
+                await self.pubsub.subscribe('trading_signals')
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Error setting up pubsub: {str(e)}")
+            return False
+
     async def process_trading_signals(self):
         """Process trading signals from Redis"""
-        try:
-            pubsub = self.redis.pubsub()
-            await pubsub.subscribe('trading_signals')
+        while self.running:
+            try:
+                # Ensure Redis connection and pubsub are set up
+                if not self.redis or not await self.redis.ping():
+                    if not await self.connect_redis():
+                        await asyncio.sleep(5)
+                        continue
 
-            while self.running:
-                message = await pubsub.get_message()
+                if not self.pubsub or not await self.setup_pubsub():
+                    await asyncio.sleep(5)
+                    continue
+
+                message = await self.pubsub.get_message(ignore_subscribe_messages=True)
                 if message and message['type'] == 'message':
                     signal = json.loads(message['data'])
                     await self.execute_trade(signal)
@@ -267,34 +308,69 @@ class TradeExecutorService:
                 await self.monitor_active_trades()
                 await asyncio.sleep(0.1)
 
-        except Exception as e:
-            logger.error(f"Error processing trading signals: {str(e)}")
-        finally:
-            await pubsub.unsubscribe()
+            except Exception as e:
+                logger.error(f"Error processing trading signals: {str(e)}")
+                # Reset connections on error
+                if self.pubsub:
+                    await self.pubsub.close()
+                self.pubsub = None
+                await asyncio.sleep(1)
+                continue
 
-    async def start(self):
-        """Start the trade executor service"""
+    async def maintain_redis(self):
+        """Maintain Redis connection"""
+        while self.running:
+            try:
+                if self.redis:
+                    await self.redis.ping()
+                else:
+                    await self.connect_redis()
+                await asyncio.sleep(1)
+            except Exception as e:
+                logger.error(f"Redis connection error: {str(e)}")
+                self.redis = None
+                await asyncio.sleep(5)
+
+    async def run(self):
+        """Run the trade executor service"""
         try:
             logger.info("Starting Trade Executor Service...")
+            
+            # First establish Redis connection
+            if not await self.connect_redis():
+                raise Exception("Failed to establish initial Redis connection")
+            
             self.update_usdc_balance()
-            await self.process_trading_signals()
+            
+            # Create tasks for trading signals processing and Redis maintenance
+            tasks = [
+                asyncio.create_task(self.process_trading_signals()),
+                asyncio.create_task(self.maintain_redis())
+            ]
+            
+            # Wait for tasks to complete
+            await asyncio.gather(*tasks)
+            
         except Exception as e:
             logger.error(f"Error in Trade Executor Service: {str(e)}")
         finally:
-            self.stop()
+            await self.stop()
 
-    def stop(self):
+    async def stop(self):
         """Stop the trade executor service"""
         logger.info("Stopping Trade Executor Service...")
         self.running = False
-        self.redis.close()
+        if self.pubsub:
+            await self.pubsub.close()
+        if self.redis:
+            await self.redis.close()
 
 if __name__ == "__main__":
     service = TradeExecutorService()
     try:
-        asyncio.run(service.start())
+        asyncio.run(service.run())
     except KeyboardInterrupt:
-        service.stop()
+        asyncio.run(service.stop())
     except Exception as e:
         logger.error(f"Critical error: {str(e)}")
-        service.stop()
+        asyncio.run(service.stop())

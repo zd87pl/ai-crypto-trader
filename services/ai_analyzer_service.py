@@ -1,14 +1,17 @@
 import os
 import json
-import redis
+import socket
 import asyncio
 from datetime import datetime
 import logging as logger
 from openai import AsyncOpenAI
+from redis.asyncio import Redis
+from redis.exceptions import ConnectionError
+from ai_trader import AITrader  # Simple import since we run from root directory
 
-# Configure logging
+# Configure logging with more debug information
 logger.basicConfig(
-    level=logger.INFO,
+    level=logger.DEBUG,  # Ensure DEBUG level logging
     format='%(asctime)s - %(levelname)s - [AIAnalyzer] %(message)s',
     handlers=[
         logger.FileHandler('logs/ai_analyzer.log'),
@@ -18,61 +21,101 @@ logger.basicConfig(
 
 class AIAnalyzerService:
     def __init__(self):
+        logger.debug("Initializing AI Analyzer Service...")
         # Load configuration
         with open('config.json', 'r') as f:
             self.config = json.load(f)
+        logger.debug(f"Loaded configuration: {json.dumps(self.config, indent=2)}")
 
         # Initialize OpenAI client
-        self.client = AsyncOpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        api_key = os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY environment variable not set")
+        self.client = AsyncOpenAI(api_key=api_key)
+        logger.info(f"Initialized OpenAI client with model: {self.config['openai']['model']}")
 
-        # Initialize Redis connection
-        self.redis = redis.Redis(
-            host=os.getenv('REDIS_HOST', 'redis'),
-            port=int(os.getenv('REDIS_PORT', 6379)),
-            decode_responses=True
-        )
+        # Initialize AITrader
+        logger.debug("Initializing AITrader...")
+        self.ai_trader = AITrader(self.config)  # Instantiate AITrader
+        logger.debug("AITrader initialized successfully")
 
+        # Redis will be initialized in connect_redis
+        self.redis = None
+        self.pubsub = None
         self.running = True
         self.market_data = {}
         self.last_analysis_time = {}
+        self.health_check_port = int(os.getenv('SERVICE_PORT', 8002))
+        logger.debug("AI Analyzer Service initialization complete")
+
+    async def connect_redis(self, max_retries=5, retry_delay=5):
+        """Establish Redis connection with retries"""
+        retries = 0
+        while retries < max_retries:
+            try:
+                if self.redis is None:
+                    logger.debug(f"Attempting Redis connection (attempt {retries + 1}/{max_retries})")
+                    redis_host = os.getenv('REDIS_HOST', 'redis')
+                    redis_port = int(os.getenv('REDIS_PORT', 6379))
+                    logger.debug(f"Connecting to Redis at {redis_host}:{redis_port}")
+                    self.redis = Redis(
+                        host=redis_host,
+                        port=redis_port,
+                        decode_responses=True
+                    )
+                await self.redis.ping()
+                logger.info("Successfully connected to Redis")
+                return True
+            except (ConnectionError, Exception) as e:
+                retries += 1
+                logger.error(f"Failed to connect to Redis (attempt {retries}/{max_retries}): {str(e)}")
+                if retries < max_retries:
+                    await asyncio.sleep(retry_delay)
+                else:
+                    logger.error("Max retries reached. Could not connect to Redis.")
+                    return False
 
     async def analyze_market_data(self, market_update):
-        """Analyze market data using OpenAI API"""
+        """Analyze market data using AITrader"""
         try:
             symbol = market_update['symbol']
             current_time = datetime.now()
 
             # Check if we need to analyze this symbol
-            if (symbol in self.last_analysis_time and 
-                (current_time - self.last_analysis_time[symbol]).seconds < self.config['trading_params']['ai_analysis_interval']):
-                return
+            if symbol in self.last_analysis_time:
+                time_since_last = (current_time - self.last_analysis_time[symbol]).seconds
+                if time_since_last < self.config['trading_params']['ai_analysis_interval']:
+                    logger.debug(f"Skipping analysis for {symbol}, last analysis was {time_since_last}s ago")
+                    return
 
-            # Prepare market data for analysis
-            prompt = self.config['openai']['analysis_prompt'].format(
-                symbol=symbol,
-                price=market_update['price'],
-                volume=market_update['volume'],
-                price_change=market_update['price_change']
-            )
+            logger.info(f"Starting analysis for {symbol}")
+            logger.debug(f"Market update data: {json.dumps(market_update, indent=2)}")
 
-            # Get analysis from OpenAI
-            response = await self.client.chat.completions.create(
-                model=self.config['openai']['model'],
-                messages=[
-                    {"role": "system", "content": "You are an experienced cryptocurrency trader focused on technical analysis and risk management."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=self.config['openai']['temperature'],
-                max_tokens=self.config['openai']['max_tokens'],
-                response_format={ "type": "json_object" }
-            )
+            # Use AITrader to analyze the trading opportunity
+            logger.debug("Calling AITrader.analyze_trade_opportunity...")
+            analysis = await self.ai_trader.analyze_trade_opportunity(market_update)
+            logger.debug(f"Received analysis from AITrader: {json.dumps(analysis, indent=2)}")
 
-            # Parse the response
-            analysis = json.loads(response.choices[0].message.content)
-
-            # Add timestamp
+            # Add metadata
             analysis['timestamp'] = current_time.isoformat()
             analysis['symbol'] = symbol
+            analysis['market_data'] = {
+                'price': market_update['current_price'],
+                'volume': market_update['avg_volume'],
+                'price_change_5m': market_update['price_change_5m'],
+                'price_change_15m': market_update['price_change_15m'],
+                'technical_indicators': {
+                    'rsi': market_update['rsi'],
+                    'stoch_k': market_update['stoch_k'],
+                    'macd': market_update['macd'],
+                    'williams_r': market_update['williams_r'],
+                    'bb_position': market_update['bb_position']
+                },
+                'trend': {
+                    'direction': market_update['trend'],
+                    'strength': market_update['trend_strength']
+                }
+            }
 
             # Log the analysis
             logger.info(f"AI Analysis for {symbol}:")
@@ -81,55 +124,169 @@ class AIAnalyzerService:
             logger.info(f"Reasoning: {analysis['reasoning']}")
 
             # Publish analysis to Redis
-            self.redis.publish('trading_signals', json.dumps(analysis))
+            if self.redis and await self.redis.ping():
+                logger.info(f"Publishing trading signal for {symbol}")
+                await self.redis.publish('trading_signals', json.dumps(analysis))
+                logger.info(f"Published trading signal for {symbol}: {json.dumps(analysis)}")
+            else:
+                logger.error("Redis connection lost during analysis publishing")
+                await self.connect_redis()
 
             # Update last analysis time
             self.last_analysis_time[symbol] = current_time
 
         except Exception as e:
-            logger.error(f"Error in AI analysis: {str(e)}")
+            logger.error(f"Error in AI analysis: {str(e)}", exc_info=True)
+
+    async def setup_pubsub(self):
+        """Set up Redis pubsub connection"""
+        try:
+            if self.redis and await self.redis.ping():
+                if self.pubsub:
+                    await self.pubsub.close()
+                logger.debug("Setting up Redis pubsub...")
+                self.pubsub = self.redis.pubsub()
+                await self.pubsub.subscribe('market_updates')
+                logger.info("Successfully subscribed to market_updates channel")
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Error setting up pubsub: {str(e)}")
+            return False
 
     async def process_market_updates(self):
         """Process market updates from Redis"""
-        try:
-            pubsub = self.redis.pubsub()
-            await pubsub.subscribe('market_updates')
+        logger.debug("Starting market updates processing...")
+        while self.running:
+            try:
+                # Ensure Redis connection and pubsub are set up
+                if not self.redis or not await self.redis.ping():
+                    logger.debug("Redis connection not available, attempting to connect...")
+                    if not await self.connect_redis():
+                        await asyncio.sleep(5)
+                        continue
 
-            while self.running:
-                message = await pubsub.get_message()
-                if message and message['type'] == 'message':
-                    market_update = json.loads(message['data'])
-                    await self.analyze_market_data(market_update)
+                if not self.pubsub or not await self.setup_pubsub():
+                    logger.debug("Pubsub not available, attempting to set up...")
+                    await asyncio.sleep(5)
+                    continue
+
+                # Process any messages in the pubsub channel
+                logger.debug("Waiting for message from Redis...")
+                message = await self.pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                
+                if message:
+                    logger.debug(f"Received message type: {message['type']}")
+                    if message['type'] == 'message':
+                        try:
+                            logger.debug(f"Raw message data: {message['data']}")
+                            market_update = json.loads(message['data'])
+                            logger.info(f"Processing market update for {market_update['symbol']}")
+                            await self.analyze_market_data(market_update)
+                        except json.JSONDecodeError as e:
+                            logger.error(f"Failed to parse market update: {e}")
+                            logger.error(f"Invalid JSON data: {message['data']}")
+                        except KeyError as e:
+                            logger.error(f"Missing required field in market update: {e}")
+                            logger.error(f"Market update data: {market_update}")
+                        except Exception as e:
+                            logger.error(f"Error processing market update: {e}", exc_info=True)
 
                 await asyncio.sleep(0.1)
 
-        except Exception as e:
-            logger.error(f"Error processing market updates: {str(e)}")
-        finally:
-            await pubsub.unsubscribe()
+            except Exception as e:
+                logger.error(f"Error in process_market_updates: {str(e)}", exc_info=True)
+                await asyncio.sleep(1)
+                # Reset connections on error
+                if self.pubsub:
+                    await self.pubsub.close()
+                self.pubsub = None
+                continue
 
-    async def start(self):
-        """Start the AI analyzer service"""
+    async def maintain_redis(self):
+        """Maintain Redis connection"""
+        logger.debug("Starting Redis connection maintenance...")
+        while self.running:
+            try:
+                if self.redis:
+                    await self.redis.ping()
+                else:
+                    await self.connect_redis()
+                await asyncio.sleep(1)
+            except Exception as e:
+                logger.error(f"Redis connection error: {str(e)}")
+                self.redis = None
+                await asyncio.sleep(5)
+
+    async def health_check_server(self):
+        """Run a simple TCP server for health checks"""
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        
+        try:
+            server.bind(('0.0.0.0', self.health_check_port))
+            server.listen(1)
+            server.setblocking(False)
+            
+            logger.info(f"Health check server listening on port {self.health_check_port}")
+            
+            while self.running:
+                try:
+                    await asyncio.sleep(1)
+                    # The socket exists and is listening, which is enough for the Docker healthcheck
+                except Exception as e:
+                    logger.error(f"Health check server error: {str(e)}")
+        except Exception as e:
+            logger.error(f"Failed to start health check server: {str(e)}")
+        finally:
+            server.close()
+
+    async def run(self):
+        """Run the AI analyzer service"""
         try:
             logger.info("Starting AI Analyzer Service...")
-            await self.process_market_updates()
+            
+            # First establish Redis connection
+            if not await self.connect_redis():
+                raise Exception("Failed to establish initial Redis connection")
+            
+            # Create tasks for market updates processing, Redis maintenance, and health check
+            tasks = [
+                asyncio.create_task(self.process_market_updates()),
+                asyncio.create_task(self.maintain_redis()),
+                asyncio.create_task(self.health_check_server())
+            ]
+            
+            # Wait for tasks to complete
+            await asyncio.gather(*tasks)
+            
         except Exception as e:
             logger.error(f"Error in AI Analyzer Service: {str(e)}")
         finally:
-            self.stop()
+            await self.stop()
 
-    def stop(self):
+    def start(self):
+        """Start the service"""
+        try:
+            # Create and run event loop
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self.run())
+        except KeyboardInterrupt:
+            asyncio.run(self.stop())
+        except Exception as e:
+            logger.error(f"Critical error: {str(e)}")
+            asyncio.run(self.stop())
+
+    async def stop(self):
         """Stop the AI analyzer service"""
         logger.info("Stopping AI Analyzer Service...")
         self.running = False
-        self.redis.close()
+        if self.pubsub:
+            await self.pubsub.close()
+        if self.redis:
+            await self.redis.close()
 
 if __name__ == "__main__":
     service = AIAnalyzerService()
-    try:
-        asyncio.run(service.start())
-    except KeyboardInterrupt:
-        service.stop()
-    except Exception as e:
-        logger.error(f"Critical error: {str(e)}")
-        service.stop()
+    service.start()
