@@ -1,10 +1,10 @@
 # Crypto Trading Bot - Microservices Architecture
 
-A sophisticated cryptocurrency trading bot built with a microservices architecture, leveraging AI for market analysis and automated trading decisions.
+A sophisticated cryptocurrency trading bot built with a microservices architecture, leveraging AI for market analysis, strategy evolution, and automated trading decisions.
 
 ## Architecture Overview
 
-The system consists of three main microservices:
+The system consists of five main microservices:
 
 1. **Market Monitor Service**
    - Streams real-time market data from Binance
@@ -21,6 +21,16 @@ The system consists of three main microservices:
    - Manages positions and risk
    - Handles order lifecycle
 
+4. **AI Trader Service**
+   - Implements AI-driven trading strategies
+   - Processes market signals
+   - Makes autonomous trading decisions
+
+5. **Strategy Evolution Service**
+   - Evolves trading strategies over time
+   - Optimizes parameters based on performance
+   - Adapts to changing market conditions
+
 ## Prerequisites
 
 - Docker and Docker Compose
@@ -32,7 +42,7 @@ The system consists of three main microservices:
 
 1. Create and configure the `.env` file:
 ```bash
-cp .env.example .env
+cp .env-sample .env
 ```
 
 Edit with your credentials:
@@ -82,6 +92,8 @@ docker-compose down
 - Market Monitor: 8001
 - Trade Executor: 8002
 - AI Analyzer: 8003
+- AI Trader: 8004
+- Strategy Evolution: 8005
 - Redis: 6379
 
 ## Monitoring
@@ -96,20 +108,40 @@ View service logs:
 docker-compose logs -f market-monitor
 docker-compose logs -f trade-executor
 docker-compose logs -f ai-analyzer
+docker-compose logs -f ai-trader
+docker-compose logs -f strategy-evolution
 ```
 
 ## Directory Structure
 
 ```
 ├── services/
+│   ├── __init__.py
 │   ├── market_monitor_service.py
 │   ├── trade_executor_service.py
-│   └── ai_analyzer_service.py
+│   ├── ai_analyzer_service.py
+│   ├── ai_trader.py
+│   └── strategy_evolution_service.py
+├── strategies/
+├── tests/
+│   ├── run_tests.py
+│   └── test_strategy_evolution.py
+├── data/
+├── logs/
+│   ├── ai_analyzer.log
+│   ├── market_monitor.log
+│   ├── strategy_evolution.log
+│   └── trade_executor.log
 ├── config.json
 ├── docker-compose.yml
 ├── Dockerfile
 ├── requirements.txt
-└── .env
+├── .env
+├── .env-sample
+├── README.md
+├── BACKLOG.md
+├── STRATEGY_EVOLUTION.md
+└── trading_strategy.md
 ```
 
 ## Development
@@ -124,14 +156,20 @@ pip install -r requirements.txt
 python3 services/market_monitor_service.py
 python3 services/trade_executor_service.py
 python3 services/ai_analyzer_service.py
+python3 services/ai_trader.py
+python3 services/strategy_evolution_service.py
 ```
 
 ## Testing
 
 Run tests:
 ```bash
-python3 -m pytest tests/
+python3 tests/run_tests.py
 ```
+
+## Strategy Evolution
+
+For details on how the trading strategies evolve and adapt over time, see [STRATEGY_EVOLUTION.md](STRATEGY_EVOLUTION.md).
 
 ## Contributing
 
@@ -165,6 +203,11 @@ Common issues:
    - Verify sufficient balance
    - Check trading rules compliance
    - Review log files
+
+3. Strategy issues:
+   - Check strategy evolution logs
+   - Verify AI model responses
+   - Review trading parameters
 
 ## License
 
