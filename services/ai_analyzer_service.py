@@ -4,17 +4,29 @@ import socket
 import asyncio
 from datetime import datetime
 import logging as logger
+from logging.handlers import RotatingFileHandler
 from openai import AsyncOpenAI
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError
-from ai_trader import AITrader  # Simple import since we run from root directory
+from ai_trader import AITrader
 
-# Configure logging with more debug information
+# Create logs directory if it doesn't exist
+os.makedirs('logs', exist_ok=True)
+
+# Configure rotating file handler
+rotating_handler = RotatingFileHandler(
+    'logs/ai_analyzer.log',
+    maxBytes=10*1024*1024,  # 10MB per file
+    backupCount=5,  # Keep 5 backup files
+    encoding='utf-8'
+)
+
+# Configure logging with rotation
 logger.basicConfig(
-    level=logger.DEBUG,  # Ensure DEBUG level logging
+    level=logger.DEBUG,
     format='%(asctime)s - %(levelname)s - [AIAnalyzer] %(message)s',
     handlers=[
-        logger.FileHandler('logs/ai_analyzer.log'),
+        rotating_handler,
         logger.StreamHandler()
     ]
 )
@@ -36,7 +48,7 @@ class AIAnalyzerService:
 
         # Initialize AITrader
         logger.debug("Initializing AITrader...")
-        self.ai_trader = AITrader(self.config)  # Instantiate AITrader
+        self.ai_trader = AITrader(self.config)
         logger.debug("AITrader initialized successfully")
 
         # Redis configuration
@@ -52,7 +64,7 @@ class AIAnalyzerService:
         self.last_analysis_time = {}
         
         # Get service port from environment variable
-        self.service_port = int(os.getenv('SERVICE_PORT', 8003))  # Default to 8003 (AI_ANALYZER_PORT)
+        self.service_port = int(os.getenv('SERVICE_PORT', 8003))
         logger.debug(f"Service port configured as: {self.service_port}")
         logger.debug("AI Analyzer Service initialization complete")
 
@@ -157,23 +169,7 @@ class AIAnalyzerService:
             # Add metadata
             analysis['timestamp'] = current_time.isoformat()
             analysis['symbol'] = symbol
-            analysis['market_data'] = {
-                'price': market_update['current_price'],
-                'volume': market_update['avg_volume'],
-                'price_change_5m': market_update['price_change_5m'],
-                'price_change_15m': market_update['price_change_15m'],
-                'technical_indicators': {
-                    'rsi': market_update['rsi'],
-                    'stoch_k': market_update['stoch_k'],
-                    'macd': market_update['macd'],
-                    'williams_r': market_update['williams_r'],
-                    'bb_position': market_update['bb_position']
-                },
-                'trend': {
-                    'direction': market_update['trend'],
-                    'strength': market_update['trend_strength']
-                }
-            }
+            analysis['market_data'] = market_update
 
             # Log the analysis
             logger.info(f"AI Analysis for {symbol}:")
@@ -326,19 +322,6 @@ class AIAnalyzerService:
         finally:
             await self.stop()
 
-    def start(self):
-        """Start the service"""
-        try:
-            # Create and run event loop
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(self.run())
-        except KeyboardInterrupt:
-            asyncio.run(self.stop())
-        except Exception as e:
-            logger.error(f"Critical error: {str(e)}")
-            asyncio.run(self.stop())
-
     async def stop(self):
         """Stop the AI analyzer service"""
         logger.info("Stopping AI Analyzer Service...")
@@ -350,4 +333,10 @@ class AIAnalyzerService:
 
 if __name__ == "__main__":
     service = AIAnalyzerService()
-    service.start()
+    try:
+        asyncio.run(service.run())
+    except KeyboardInterrupt:
+        asyncio.run(service.stop())
+    except Exception as e:
+        logger.error(f"Critical error: {str(e)}")
+        asyncio.run(service.stop())

@@ -6,6 +6,7 @@ import websockets
 from datetime import datetime
 from binance.client import Client
 import logging as logger
+from logging.handlers import RotatingFileHandler
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError
 import pandas as pd
@@ -14,12 +15,23 @@ from ta.trend import SMAIndicator, EMAIndicator, MACD
 from ta.momentum import RSIIndicator, StochasticOscillator, WilliamsRIndicator
 from ta.volatility import BollingerBands
 
-# Configure logging
+# Create logs directory if it doesn't exist
+os.makedirs('logs', exist_ok=True)
+
+# Configure rotating file handler
+rotating_handler = RotatingFileHandler(
+    'logs/market_monitor.log',
+    maxBytes=10*1024*1024,  # 10MB per file
+    backupCount=5,  # Keep 5 backup files
+    encoding='utf-8'
+)
+
+# Configure logging with rotation
 logger.basicConfig(
-    level=logger.DEBUG,  # Changed to DEBUG level
+    level=logger.DEBUG,
     format='%(asctime)s - %(levelname)s - [MarketMonitor] %(message)s',
     handlers=[
-        logger.FileHandler('logs/market_monitor.log'),
+        rotating_handler,
         logger.StreamHandler()
     ]
 )
@@ -45,10 +57,10 @@ class MarketMonitorService:
         self.health_check_port = int(os.getenv('MARKET_MONITOR_PORT', 8001))
         
         # Rate limiting settings
-        self.update_interval = 15  # Minimum seconds between updates for each symbol
+        self.update_interval = 5  # Reduced from 15 to 5 seconds between updates
         self.last_update_time = {}  # Track last update time for each symbol
-        self.batch_size = 3  # Number of symbols to process in each batch
-        self.batch_interval = 5  # Seconds between processing batches
+        self.batch_size = 5  # Increased from 3 to 5 symbols per batch
+        self.batch_interval = 2  # Reduced from 5 to 2 seconds between batches
         self.pending_updates = asyncio.Queue()  # Queue for pending market updates
 
     async def connect_redis(self, max_retries=5, retry_delay=5):
@@ -80,99 +92,159 @@ class MarketMonitorService:
             # Check if we have cached data that's still valid
             if symbol in self.historical_data:
                 last_update = self.historical_data[symbol]['timestamp']
-                if (datetime.now() - last_update).total_seconds() < 300:  # Cache for 5 minutes
-                    return self.historical_data[symbol]['data']
+                if (datetime.now() - last_update).total_seconds() < 60:  # Cache for 1 minute
+                    return self.historical_data[symbol]
 
-            klines = self.client.get_klines(
+            # Get 1m, 3m, 5m, and 15m candles
+            klines_1m = self.client.get_klines(
                 symbol=symbol,
-                interval='5m',  # 5-minute candles
-                limit=100  # Last 100 candles
+                interval='1m',
+                limit=100
             )
             
-            df = pd.DataFrame(klines, columns=[
+            klines_3m = self.client.get_klines(
+                symbol=symbol,
+                interval='3m',
+                limit=100
+            )
+            
+            klines_5m = self.client.get_klines(
+                symbol=symbol,
+                interval='5m',
+                limit=100
+            )
+            
+            klines_15m = self.client.get_klines(
+                symbol=symbol,
+                interval='15m',
+                limit=100
+            )
+            
+            # Process candles for all timeframes
+            df_1m = pd.DataFrame(klines_1m, columns=[
                 'timestamp', 'open', 'high', 'low', 'close', 'volume',
                 'close_time', 'quote_volume', 'trades', 'taker_buy_base',
                 'taker_buy_quote', 'ignore'
             ])
             
-            # Convert timestamp to datetime
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df_3m = pd.DataFrame(klines_3m, columns=[
+                'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                'close_time', 'quote_volume', 'trades', 'taker_buy_base',
+                'taker_buy_quote', 'ignore'
+            ])
             
-            # Convert numeric columns to float
-            numeric_columns = ['open', 'high', 'low', 'close', 'volume', 'quote_volume']
-            for col in numeric_columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
+            df_5m = pd.DataFrame(klines_5m, columns=[
+                'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                'close_time', 'quote_volume', 'trades', 'taker_buy_base',
+                'taker_buy_quote', 'ignore'
+            ])
+            
+            df_15m = pd.DataFrame(klines_15m, columns=[
+                'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                'close_time', 'quote_volume', 'trades', 'taker_buy_base',
+                'taker_buy_quote', 'ignore'
+            ])
+            
+            # Convert timestamp to datetime for all dataframes
+            for df in [df_1m, df_3m, df_5m, df_15m]:
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                numeric_columns = ['open', 'high', 'low', 'close', 'volume', 'quote_volume']
+                for col in numeric_columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
             
             # Cache the data
             self.historical_data[symbol] = {
-                'data': df,
+                'data_1m': df_1m,
+                'data_3m': df_3m,
+                'data_5m': df_5m,
+                'data_15m': df_15m,
                 'timestamp': datetime.now()
             }
             
-            return df
+            return self.historical_data[symbol]
         except Exception as e:
             logger.error(f"Error fetching historical data for {symbol}: {str(e)}")
             return None
 
-    def calculate_technical_indicators(self, df):
-        """Calculate technical indicators"""
+    def calculate_technical_indicators(self, data):
+        """Calculate technical indicators using multiple timeframes"""
         try:
-            # RSI
-            rsi = RSIIndicator(close=df['close'])
-            df['rsi'] = rsi.rsi()
-
-            # Stochastic
-            stoch = StochasticOscillator(high=df['high'], low=df['low'], close=df['close'])
-            df['stoch_k'] = stoch.stoch()
-
-            # MACD
-            macd = MACD(close=df['close'])
-            df['macd'] = macd.macd()
-
-            # Williams %R
-            williams = WilliamsRIndicator(high=df['high'], low=df['low'], close=df['close'])
-            df['williams_r'] = williams.williams_r()
-
-            # Bollinger Bands
-            bb = BollingerBands(close=df['close'])
-            df['bb_high'] = bb.bollinger_hband()
-            df['bb_low'] = bb.bollinger_lband()
-            df['bb_mid'] = bb.bollinger_mavg()
+            df_1m = data['data_1m']
+            df_3m = data['data_3m']
+            df_5m = data['data_5m']
+            df_15m = data['data_15m']
+            
+            # Calculate indicators for 1m timeframe
+            rsi_1m = RSIIndicator(close=df_1m['close'])
+            stoch_1m = StochasticOscillator(high=df_1m['high'], low=df_1m['low'], close=df_1m['close'])
+            macd_1m = MACD(close=df_1m['close'])
+            williams_1m = WilliamsRIndicator(high=df_1m['high'], low=df_1m['low'], close=df_1m['close'])
+            bb_1m = BollingerBands(close=df_1m['close'])
+            
+            # Calculate indicators for 3m timeframe
+            rsi_3m = RSIIndicator(close=df_3m['close'])
+            macd_3m = MACD(close=df_3m['close'])
+            
+            # Calculate indicators for 5m timeframe
+            rsi_5m = RSIIndicator(close=df_5m['close'])
+            macd_5m = MACD(close=df_5m['close'])
+            
+            # Calculate price changes
+            last_price = float(df_1m['close'].iloc[-1])
+            price_change_1m = ((last_price - float(df_1m['open'].iloc[-1])) / float(df_1m['open'].iloc[-1])) * 100
+            price_change_3m = ((last_price - float(df_3m['open'].iloc[-1])) / float(df_3m['open'].iloc[-1])) * 100
+            price_change_5m = ((last_price - float(df_5m['open'].iloc[-1])) / float(df_5m['open'].iloc[-1])) * 100
+            price_change_15m = ((last_price - float(df_15m['open'].iloc[-1])) / float(df_15m['open'].iloc[-1])) * 100
             
             # Calculate BB position
-            bb_range = df['bb_high'] - df['bb_low']
-            df['bb_position'] = (df['close'] - df['bb_low']) / bb_range.replace(0, np.nan)
-
-            # Moving Averages for Trend
-            sma20 = SMAIndicator(close=df['close'], window=20)
-            sma50 = SMAIndicator(close=df['close'], window=50)
-            df['sma_20'] = sma20.sma_indicator()
-            df['sma_50'] = sma50.sma_indicator()
-
-            # Determine trend
-            last_close = float(df['close'].iloc[-1])
-            sma20_last = float(df['sma_20'].iloc[-1])
-            sma50_last = float(df['sma_50'].iloc[-1])
+            bb_range = bb_1m.bollinger_hband() - bb_1m.bollinger_lband()
+            bb_position = (df_1m['close'] - bb_1m.bollinger_lband()) / bb_range.replace(0, np.nan)
             
-            # Calculate trend strength
-            strength = ((last_close - sma20_last) / sma20_last * 100 +
-                       (last_close - sma50_last) / sma50_last * 100) / 2
+            # Determine trend using multiple timeframes
+            sma20_1m = SMAIndicator(close=df_1m['close'], window=20)
+            sma50_1m = SMAIndicator(close=df_1m['close'], window=50)
+            sma20_5m = SMAIndicator(close=df_5m['close'], window=20)
             
-            if last_close > sma20_last and sma20_last > sma50_last:
+            df_1m['sma_20'] = sma20_1m.sma_indicator()
+            df_1m['sma_50'] = sma50_1m.sma_indicator()
+            df_5m['sma_20'] = sma20_5m.sma_indicator()
+            
+            # Calculate trend strength using multiple timeframes
+            last_close = float(df_1m['close'].iloc[-1])
+            sma20_last_1m = float(df_1m['sma_20'].iloc[-1])
+            sma50_last_1m = float(df_1m['sma_50'].iloc[-1])
+            sma20_last_5m = float(df_5m['sma_20'].iloc[-1])
+            
+            strength_1m = ((last_close - sma20_last_1m) / sma20_last_1m * 100)
+            strength_5m = ((last_close - sma20_last_5m) / sma20_last_5m * 100)
+            
+            # Combined trend strength
+            trend_strength = (strength_1m * 0.6 + strength_5m * 0.4)  # Weight recent data more heavily
+            
+            # Determine overall trend
+            if last_close > sma20_last_1m and sma20_last_1m > sma50_last_1m:
                 trend = 'uptrend'
-            elif last_close < sma20_last and sma20_last < sma50_last:
+            elif last_close < sma20_last_1m and sma20_last_1m < sma50_last_1m:
                 trend = 'downtrend'
             else:
                 trend = 'sideways'
 
             return {
-                'rsi': float(df['rsi'].iloc[-1]),
-                'stoch_k': float(df['stoch_k'].iloc[-1]),
-                'macd': float(df['macd'].iloc[-1]),
-                'williams_r': float(df['williams_r'].iloc[-1]),
-                'bb_position': float(df['bb_position'].iloc[-1]),
+                'rsi': float(rsi_1m.rsi().iloc[-1]),
+                'rsi_3m': float(rsi_3m.rsi().iloc[-1]),
+                'rsi_5m': float(rsi_5m.rsi().iloc[-1]),
+                'stoch_k': float(stoch_1m.stoch().iloc[-1]),
+                'macd': float(macd_1m.macd().iloc[-1]),
+                'macd_3m': float(macd_3m.macd().iloc[-1]),
+                'macd_5m': float(macd_5m.macd().iloc[-1]),
+                'williams_r': float(williams_1m.williams_r().iloc[-1]),
+                'bb_position': float(bb_position.iloc[-1]),
                 'trend': trend,
-                'trend_strength': abs(strength)
+                'trend_strength': abs(trend_strength),
+                'price_change_1m': price_change_1m,
+                'price_change_3m': price_change_3m,
+                'price_change_5m': price_change_5m,
+                'price_change_15m': price_change_15m
             }
         except Exception as e:
             logger.error(f"Error calculating technical indicators: {str(e)}")
@@ -237,29 +309,33 @@ class MarketMonitorService:
                         # Process market data
                         price = float(ticker['c'])
                         volume = float(ticker['v']) * price
-                        price_change = ((price - float(ticker['o'])) / float(ticker['o'])) * 100
 
                         # Get historical data and calculate indicators
-                        df = self.get_historical_data(symbol)
-                        if df is not None:
-                            indicators = self.calculate_technical_indicators(df)
+                        data = self.get_historical_data(symbol)
+                        if data is not None:
+                            indicators = self.calculate_technical_indicators(data)
                             if indicators:
-                                # Create complete market update
+                                # Create complete market update with all fields at the top level
                                 market_update = {
                                     'symbol': symbol,
                                     'current_price': price,
                                     'avg_volume': volume,
-                                    'price_change': price_change,
                                     'timestamp': current_time.isoformat(),
                                     'rsi': indicators['rsi'],
+                                    'rsi_3m': indicators['rsi_3m'],
+                                    'rsi_5m': indicators['rsi_5m'],
                                     'stoch_k': indicators['stoch_k'],
                                     'macd': indicators['macd'],
+                                    'macd_3m': indicators['macd_3m'],
+                                    'macd_5m': indicators['macd_5m'],
                                     'williams_r': indicators['williams_r'],
                                     'bb_position': indicators['bb_position'],
                                     'trend': indicators['trend'],
                                     'trend_strength': indicators['trend_strength'],
-                                    'price_change_5m': price_change,
-                                    'price_change_15m': price_change * 3
+                                    'price_change_1m': indicators['price_change_1m'],
+                                    'price_change_3m': indicators['price_change_3m'],
+                                    'price_change_5m': indicators['price_change_5m'],
+                                    'price_change_15m': indicators['price_change_15m']
                                 }
 
                                 # Store in local cache
@@ -285,13 +361,13 @@ class MarketMonitorService:
                                 logger.info(f"Market update - {symbol}: ${price:.8f} (24h volume: ${volume:.2f}, RSI: {indicators['rsi']:.2f})")
 
                                 # Check for trading opportunities
-                                if abs(price_change) >= self.config['trading_params'].get('min_price_change_pct', 1.0) and \
+                                if abs(indicators['price_change_1m']) >= self.config['trading_params'].get('min_price_change_pct', 0.5) and \
                                    volume >= self.config['trading_params']['min_volume_usdc']:
                                     await self.redis.publish(
                                         'trading_opportunities',
                                         json.dumps(market_update)
                                     )
-                                    logger.info(f"Found opportunity: {symbol} at ${price:.8f} (change: {price_change:.2f}%)")
+                                    logger.info(f"Found opportunity: {symbol} at ${price:.8f} (1m change: {indicators['price_change_1m']:.2f}%)")
 
                     except Exception as e:
                         logger.error(f"Error processing update for {symbol}: {str(e)}")

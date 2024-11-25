@@ -1,44 +1,43 @@
 {
     "trading_params": {
-        "min_volume_usdc": 100000,
-        "min_price_change_pct": 1.0,
-        "position_size": 0.15,
+        "min_volume_usdc": 50000,
+        "min_price_change_pct": 0.5,
+        "position_size": 0.4,
         "max_positions": 5,
-        "stop_loss_pct": 2,
-        "take_profit_pct": 4,
-        "min_trade_amount": 100,
-        "ai_analysis_interval": 300,
-        "ai_confidence_threshold": 0.7
+        "stop_loss_pct": 2.0,
+        "take_profit_pct": 4.0,
+        "min_trade_amount": 40,
+        "ai_analysis_interval": 60,
+        "ai_confidence_threshold": 0.75,
+        "price_precision": 4,
+        "quantity_precision": 6,
+        "candle_interval": "1m"
     },
     "openai": {
         "model": "gpt-4o",
         "temperature": 0.7,
         "max_tokens": 2000,
-        "analysis_prompt": "As a cryptocurrency trading expert, analyze the market conditions for {symbol} with:\n\nPrice: ${price:.8f}\n24h Volume: ${volume:.2f}\n5m Price Change: {price_change_5m:.2f}%\n15m Price Change: {price_change_15m:.2f}%\n\nTechnical Indicators:\n- RSI: {rsi:.2f}\n- Stochastic K: {stoch:.2f}\n- MACD: {macd:.8f}\n- Williams %R: {williams_r:.2f}\n- Bollinger Band Position: {bb_position:.4f}\n\nMarket Trend:\n- Direction: {trend}\n- Strength: {trend_strength:.4f}\n\nProvide a trading decision based on:\n1. Price action and momentum indicators\n2. Trend analysis and technical indicators\n3. Volume analysis\n4. Risk assessment\n\nRespond with a JSON object containing:\n- decision: 'BUY', 'SELL', or 'HOLD'\n- confidence: value between 0 and 1\n- reasoning: detailed explanation of the analysis\n- risk_level: 'LOW', 'MEDIUM', or 'HIGH'\n- key_indicators: list of most influential indicators for this decision",
+        "analysis_prompt": "As a cryptocurrency trading expert, analyze the market conditions for {symbol} with:\n\nPrice: ${price:.8f}\n24h Volume: ${volume:.2f}\n1m Price Change: {price_change_1m:.2f}%\n3m Price Change: {price_change_3m:.2f}%\n5m Price Change: {price_change_5m:.2f}%\n\nTechnical Indicators:\n- RSI: {rsi:.2f}\n- Stochastic K: {stoch:.2f}\n- MACD: {macd:.8f}\n- Williams %R: {williams_r:.2f}\n- Bollinger Band Position: {bb_position:.4f}\n\nMarket Trend:\n- Direction: {trend}\n- Strength: {trend_strength:.4f}\n\nProvide a trading decision based on:\n1. Price action and momentum indicators\n2. Trend analysis and technical indicators\n3. Volume analysis\n4. Risk assessment\n\nRespond with a JSON object containing:\n- decision: 'BUY', 'SELL', or 'HOLD'\n- confidence: value between 0 and 1\n- reasoning: detailed explanation of the analysis\n- risk_level: 'LOW', 'MEDIUM', or 'HIGH'\n- key_indicators: list of most influential indicators for this decision",
         "risk_prompt": "Analyze risk and position sizing for {symbol} trade with:\n\nAvailable Capital: ${capital:.2f}\nVolatility: {volatility:.2f}\nCurrent Price: ${price:.8f}\nTrend Strength: {trend_strength:.4f}\n\nProvide a JSON response with:\n- position_size: recommended position size as a decimal (0-1)\n- stop_loss_pct: recommended stop loss percentage\n- take_profit_pct: recommended take profit percentage\n- reasoning: detailed explanation of the recommendations",
         "market_prompt": "Analyze overall market conditions based on the following data:\n\n{market_data}\n\nProvide a JSON response with:\n- market_sentiment: 'BULLISH', 'BEARISH', or 'NEUTRAL'\n- top_opportunities: list of symbols with highest potential\n- risks: list of current market risks\n- reasoning: detailed explanation of the analysis"
     },
     "evolution": {
-        "min_sharpe_ratio": 1.5,
+        "min_sharpe_ratio": 1.2,
         "max_drawdown": 15.0,
-        "min_win_rate": 0.55,
-        "min_profit_factor": 1.3,
+        "min_win_rate": 0.52,
+        "min_profit_factor": 1.2,
         "improvement_threshold": 0.1,
         "max_iterations": 10,
         "convergence_criteria": 0.02,
         "strategy_types": [
-            "mean_reversion",
-            "trend_following",
-            "breakout",
             "momentum",
-            "statistical_arbitrage"
+            "breakout",
+            "scalping"
         ],
         "timeframes": [
             "1m",
-            "5m",
-            "15m",
-            "1h",
-            "4h"
+            "3m",
+            "5m"
         ],
         "worker_templates": {
             "base": {
@@ -89,11 +88,11 @@
             ]
         },
         "risk_management": {
-            "max_position_size": 0.1,
+            "max_position_size": 0.4,
             "max_open_positions": 5,
-            "max_daily_drawdown": 0.05,
+            "max_daily_drawdown": 0.06,
             "max_correlation": 0.7,
-            "min_liquidity": 1000000
+            "min_liquidity": 50000
         },
         "optimization_goals": {
             "primary": "sharpe_ratio",
@@ -103,10 +102,10 @@
                 "profit_factor"
             ],
             "constraints": {
-                "min_trades_per_day": 5,
+                "min_trades_per_day": 20,
                 "max_trades_per_day": 50,
-                "min_holding_period": "5m",
-                "max_holding_period": "24h"
+                "min_holding_period": "1m",
+                "max_holding_period": "15m"
             }
         }
     },

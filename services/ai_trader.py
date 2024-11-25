@@ -23,36 +23,71 @@ class AITrader:
     async def analyze_trade_opportunity(self, market_data: Dict) -> Dict:
         """Analyze a single trading opportunity using OpenAI"""
         try:
+            # Log incoming market data
+            logger.debug(f"Analyzing trade opportunity with market data: {json.dumps(market_data, indent=2)}")
+            
+            # Verify all required fields are present
+            required_fields = [
+                'symbol', 'current_price', 'avg_volume', 'rsi', 'stoch_k',
+                'macd', 'williams_r', 'bb_position', 'trend', 'trend_strength',
+                'price_change_1m', 'price_change_3m', 'price_change_5m', 'price_change_15m'
+            ]
+            
+            missing_fields = [field for field in required_fields if field not in market_data]
+            if missing_fields:
+                raise KeyError(f"Missing required fields: {', '.join(missing_fields)}")
+            
             # Format the analysis prompt with market data
-            prompt = self.config['openai']['analysis_prompt'].format(
-                symbol=market_data['symbol'],
-                price=market_data['current_price'],
-                volume=market_data['avg_volume'],
-                rsi=market_data['rsi'],
-                stoch=market_data['stoch_k'],
-                macd=market_data['macd'],
-                williams_r=market_data['williams_r'],
-                bb_position=market_data['bb_position'],
-                trend=market_data['trend'],
-                trend_strength=market_data['trend_strength'],
-                price_change_5m=market_data['price_change_5m'],
-                price_change_15m=market_data['price_change_15m']
-            )
+            try:
+                prompt = self.config['openai']['analysis_prompt'].format(
+                    symbol=market_data['symbol'],
+                    price=market_data['current_price'],
+                    volume=market_data['avg_volume'],
+                    rsi=market_data['rsi'],
+                    stoch=market_data['stoch_k'],
+                    macd=market_data['macd'],
+                    williams_r=market_data['williams_r'],
+                    bb_position=market_data['bb_position'],
+                    trend=market_data['trend'],
+                    trend_strength=market_data['trend_strength'],
+                    price_change_1m=market_data['price_change_1m'],
+                    price_change_3m=market_data['price_change_3m'],
+                    price_change_5m=market_data['price_change_5m'],
+                    price_change_15m=market_data['price_change_15m']
+                )
+            except KeyError as e:
+                logger.error(f"Error formatting prompt: {str(e)}")
+                logger.error(f"Market data keys: {list(market_data.keys())}")
+                raise
+            except Exception as e:
+                logger.error(f"Unexpected error formatting prompt: {str(e)}")
+                raise
+            
+            logger.debug(f"Formatted prompt: {prompt}")
             
             # Get analysis from OpenAI
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are an experienced cryptocurrency trader focused on technical analysis and risk management."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-                response_format={ "type": "json_object" }
-            )
+            try:
+                response = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": "You are an experienced cryptocurrency trader focused on technical analysis and risk management."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                    response_format={ "type": "json_object" }
+                )
+            except Exception as e:
+                logger.error(f"OpenAI API error: {str(e)}")
+                raise
             
             # Parse the response
-            analysis = json.loads(response.choices[0].message.content)
+            try:
+                analysis = json.loads(response.choices[0].message.content)
+            except Exception as e:
+                logger.error(f"Error parsing OpenAI response: {str(e)}")
+                logger.error(f"Raw response: {response.choices[0].message.content}")
+                raise
             
             # Add timestamp to analysis
             analysis['timestamp'] = datetime.now().isoformat()
@@ -66,7 +101,7 @@ class AITrader:
             return analysis
             
         except Exception as e:
-            logger.error(f"Error in AI analysis: {str(e)}")
+            logger.error(f"Error in AI analysis: {str(e)}", exc_info=True)
             return {
                 'decision': 'ERROR',
                 'confidence': 0,
@@ -131,6 +166,8 @@ class AITrader:
                     f"Volume: ${data['avg_volume']:,.2f}\n"
                     f"RSI: {data['rsi']:.2f}\n"
                     f"Trend: {data['trend']}\n"
+                    f"1m Change: {data['price_change_1m']:.2f}%\n"
+                    f"3m Change: {data['price_change_3m']:.2f}%\n"
                     f"5m Change: {data['price_change_5m']:.2f}%\n"
                     f"15m Change: {data['price_change_15m']:.2f}%\n"
                     f"---"

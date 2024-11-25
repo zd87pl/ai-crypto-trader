@@ -6,15 +6,27 @@ from datetime import datetime
 from binance.client import Client
 from binance.enums import *
 import logging as logger
+from logging.handlers import RotatingFileHandler
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError
 
-# Configure logging with more debug information
+# Create logs directory if it doesn't exist
+os.makedirs('logs', exist_ok=True)
+
+# Configure rotating file handler
+rotating_handler = RotatingFileHandler(
+    'logs/trade_executor.log',
+    maxBytes=10*1024*1024,  # 10MB per file
+    backupCount=5,  # Keep 5 backup files
+    encoding='utf-8'
+)
+
+# Configure logging with rotation
 logger.basicConfig(
-    level=logger.DEBUG,  # Changed to DEBUG for more detailed logging
+    level=logger.DEBUG,
     format='%(asctime)s - %(levelname)s - [TradeExecutor] %(message)s',
     handlers=[
-        logger.FileHandler('logs/trade_executor.log'),
+        rotating_handler,
         logger.StreamHandler()
     ]
 )
@@ -49,14 +61,91 @@ class TradeExecutorService:
         self.active_trades = {}
         self.symbol_info = {}
         self.available_usdc = 0.0
+        self.holdings = {}  # Track all asset holdings
+        self.total_portfolio_value = 0.0  # Track total portfolio value in USDC
         
         # Get service port from environment variable
-        self.service_port = int(os.getenv('SERVICE_PORT', 8002))  # Default to 8002 (TRADE_EXECUTOR_PORT)
+        self.service_port = int(os.getenv('SERVICE_PORT', 8002))
         logger.debug(f"Service port configured as: {self.service_port}")
         
         # Load initial trading rules
         self.load_trading_rules()
         logger.debug("Trade Executor Service initialization complete")
+
+    async def initialize(self):
+        """Initialize async components"""
+        try:
+            # Update holdings
+            await self.update_holdings()
+            
+            # Initial cleanup to convert all assets to USDC
+            await self.cleanup_positions()
+            
+            logger.info("Async initialization complete")
+        except Exception as e:
+            logger.error(f"Error in async initialization: {str(e)}")
+            raise
+
+    async def cleanup_positions(self):
+        """Sell all non-USDC assets to start fresh"""
+        try:
+            logger.info("Starting cleanup - Converting all assets to USDC...")
+            account = self.client.get_account()
+            
+            for balance in account['balances']:
+                asset = balance['asset']
+                free_amount = float(balance['free'])
+                
+                if asset != 'USDC' and free_amount > 0:
+                    symbol = f"{asset}USDC"
+                    try:
+                        # Check if trading pair exists
+                        ticker = self.client.get_symbol_ticker(symbol=symbol)
+                        if ticker:
+                            # Get symbol info for precision
+                            symbol_info = self.symbol_info.get(symbol)
+                            if not symbol_info:
+                                logger.error(f"No trading rules found for {symbol}")
+                                continue
+                            
+                            # Check minimum quantity before logging sell attempt
+                            if free_amount < symbol_info['min_qty']:
+                                logger.debug(f"Skipping {asset}: amount too small to sell ({free_amount} < {symbol_info['min_qty']})")
+                                continue
+                            
+                            logger.info(f"Selling {free_amount} {asset} to USDC")
+                            
+                            # Round quantity to valid step size
+                            quantity = self.round_step_size(free_amount, symbol_info['step_size'])
+                            
+                            # Check if rounded quantity is still valid
+                            if quantity < symbol_info['min_qty']:
+                                logger.debug(f"Skipping {asset}: rounded quantity too small ({quantity} < {symbol_info['min_qty']})")
+                                continue
+                            
+                            # Place market sell order
+                            order = self.client.create_order(
+                                symbol=symbol,
+                                side=SIDE_SELL,
+                                type=ORDER_TYPE_MARKET,
+                                quantity=quantity
+                            )
+                            
+                            fill_price = float(order['fills'][0]['price'])
+                            logger.info(f"Sold {quantity} {asset} at ${fill_price:.8f}")
+                            
+                    except Exception as e:
+                        logger.error(f"Error selling {asset}: {str(e)}")
+            
+            # Wait a moment for orders to settle
+            await asyncio.sleep(5)
+            
+            # Update holdings
+            await self.update_holdings()
+            logger.info("Cleanup complete - All assets converted to USDC")
+            
+        except Exception as e:
+            logger.error(f"Error in cleanup_positions: {str(e)}")
 
     async def connect_redis(self, max_retries=10, retry_delay=5):
         """Establish Redis connection with retries"""
@@ -95,6 +184,50 @@ class TradeExecutorService:
                 await asyncio.sleep(retry_delay)
                 retries += 1
 
+    async def setup_pubsub(self):
+        """Set up Redis pubsub connection"""
+        try:
+            # Verify Redis connection
+            if not self.redis or not await self.redis.ping():
+                logger.error("Redis connection not available for pubsub setup")
+                return False
+
+            # Close existing pubsub if any
+            if self.pubsub:
+                logger.debug("Closing existing pubsub connection")
+                await self.pubsub.close()
+                self.pubsub = None
+
+            # Create new pubsub instance
+            logger.debug("Creating new pubsub instance")
+            self.pubsub = self.redis.pubsub()
+            
+            # Subscribe to channels
+            logger.debug("Subscribing to trading_signals and strategy_update channels")
+            await self.pubsub.subscribe('trading_signals', 'strategy_update')
+            
+            # Get first messages to confirm subscriptions
+            logger.debug("Waiting for subscription confirmation messages")
+            subscribed_count = 0
+            while subscribed_count < 2:  # Wait for both subscriptions
+                message = await self.pubsub.get_message(timeout=1.0)
+                if message and message['type'] == 'subscribe':
+                    subscribed_count += 1
+            
+            if subscribed_count == 2:
+                logger.info("Successfully subscribed to all channels")
+                return True
+            else:
+                logger.error("Failed to subscribe to all channels")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error in pubsub setup: {str(e)}", exc_info=True)
+            if self.pubsub:
+                await self.pubsub.close()
+                self.pubsub = None
+            return False
+
     def load_trading_rules(self):
         """Load trading rules for all USDC pairs"""
         try:
@@ -124,22 +257,111 @@ class TradeExecutorService:
             logger.error(f"Error loading trading rules: {str(e)}")
             raise
 
-    def update_usdc_balance(self):
-        """Update available USDC balance"""
+    async def update_holdings(self):
+        """Update holdings and portfolio value"""
         try:
             account = self.client.get_account()
+            
+            # Reset holdings
+            self.holdings = {}
+            total_value = 0.0
+            
+            # Update all balances
             for balance in account['balances']:
-                if balance['asset'] == 'USDC':
-                    self.available_usdc = float(balance['free'])
-                    logger.info(f"USDC balance updated: ${self.available_usdc:.2f}")
-                    break
+                asset = balance['asset']
+                free_amount = float(balance['free'])
+                locked_amount = float(balance['locked'])
+                total_amount = free_amount + locked_amount
+                
+                if total_amount > 0:
+                    if asset == 'USDC':
+                        self.available_usdc = free_amount
+                        total_value += total_amount
+                        self.holdings[asset] = {
+                            'amount': total_amount,
+                            'free': free_amount,
+                            'locked': locked_amount,
+                            'value_usdc': total_amount
+                        }
+                    else:
+                        # Get current price in USDC if available
+                        try:
+                            ticker = self.client.get_symbol_ticker(symbol=f"{asset}USDC")
+                            price = float(ticker['price'])
+                            value_usdc = total_amount * price
+                            total_value += value_usdc
+                            
+                            self.holdings[asset] = {
+                                'amount': total_amount,
+                                'free': free_amount,
+                                'locked': locked_amount,
+                                'value_usdc': value_usdc,
+                                'current_price': price
+                            }
+                        except Exception as e:
+                            logger.debug(f"Could not get USDC price for {asset}: {str(e)}")
+            
+            self.total_portfolio_value = total_value
+            logger.info(f"Updated holdings - Total Portfolio Value: ${self.total_portfolio_value:.2f}")
+            logger.info(f"Available USDC: ${self.available_usdc:.2f}")
+            
+            # Store holdings in Redis for dashboard
+            if self.redis and await self.redis.ping():
+                await self.redis.set('holdings', json.dumps({
+                    'assets': self.holdings,
+                    'total_value': self.total_portfolio_value,
+                    'available_usdc': self.available_usdc,
+                    'timestamp': datetime.now().isoformat()
+                }))
+            
         except Exception as e:
-            logger.error(f"Error updating USDC balance: {str(e)}")
+            logger.error(f"Error updating holdings: {str(e)}")
+
+    async def check_trading_conditions(self, symbol: str, decision: str) -> bool:
+        """Check if trading conditions are met"""
+        try:
+            # Update holdings first
+            await self.update_holdings()
+            
+            # Check if we have enough USDC for new trades
+            min_usdc_required = self.config['trading_params']['min_trade_amount']
+            if self.available_usdc < min_usdc_required:
+                logger.info(f"Insufficient USDC balance (${self.available_usdc:.2f}) for trading. Minimum required: ${min_usdc_required:.2f}")
+                return False
+            
+            # Check if we're already at max positions
+            if len(self.active_trades) >= self.config['trading_params']['max_positions']:
+                logger.info("Maximum number of positions reached")
+                return False
+            
+            # For sell decisions, check if we have the asset
+            if decision == 'SELL':
+                asset = symbol.replace('USDC', '')
+                if asset not in self.holdings or self.holdings[asset]['free'] <= 0:
+                    logger.info(f"No free {asset} balance available for selling")
+                    return False
+            
+            # Check if total portfolio value is above minimum required
+            min_portfolio_value = self.config['trading_params'].get('min_portfolio_value', 100)
+            if self.total_portfolio_value < min_portfolio_value:
+                logger.info(f"Total portfolio value (${self.total_portfolio_value:.2f}) below minimum required (${min_portfolio_value:.2f})")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error checking trading conditions: {str(e)}")
+            return False
 
     def round_step_size(self, quantity: float, step_size: float) -> float:
         """Round quantity to valid step size"""
         precision = len(str(step_size).split('.')[-1])
         return round(quantity - (quantity % step_size), precision)
+
+    def round_price(self, price: float, tick_size: float) -> float:
+        """Round price to valid tick size"""
+        precision = len(str(tick_size).split('.')[-1])
+        return round(price - (price % tick_size), precision)
 
     async def execute_trade(self, signal: dict):
         """Execute a trade based on the trading signal"""
@@ -153,6 +375,11 @@ class TradeExecutorService:
             # Skip if confidence is too low
             if confidence < self.config['trading_params']['ai_confidence_threshold']:
                 logger.debug(f"Skipping trade due to low confidence: {confidence}")
+                return
+
+            # Check trading conditions
+            if not await self.check_trading_conditions(symbol, decision):
+                logger.info("Trading conditions not met, skipping trade")
                 return
 
             # Handle SELL signals
@@ -210,9 +437,15 @@ class TradeExecutorService:
                 filled_quantity = float(order['executedQty'])
                 logger.info(f"Market buy order filled at ${fill_price:.8f}")
 
-                # Calculate stop loss and take profit prices
-                stop_loss_price = fill_price * (1 - self.config['trading_params']['stop_loss_pct'] / 100)
-                take_profit_price = fill_price * (1 + self.config['trading_params']['take_profit_pct'] / 100)
+                # Calculate and round stop loss and take profit prices
+                stop_loss_price = self.round_price(
+                    fill_price * (1 - self.config['trading_params']['stop_loss_pct'] / 100),
+                    rules['tick_size']
+                )
+                take_profit_price = self.round_price(
+                    fill_price * (1 + self.config['trading_params']['take_profit_pct'] / 100),
+                    rules['tick_size']
+                )
 
                 # Place stop loss order
                 logger.debug(f"Placing stop loss order at ${stop_loss_price:.8f}")
@@ -223,7 +456,7 @@ class TradeExecutorService:
                     timeInForce=TIME_IN_FORCE_GTC,
                     quantity=filled_quantity,
                     stopPrice=stop_loss_price,
-                    price=stop_loss_price * 0.99
+                    price=self.round_price(stop_loss_price * 0.99, rules['tick_size'])
                 )
 
                 # Place take profit order
@@ -255,8 +488,8 @@ class TradeExecutorService:
                 logger.info(f"Stop Loss: ${stop_loss_price:.8f}")
                 logger.info(f"Take Profit: ${take_profit_price:.8f}")
 
-                # Update balance
-                self.update_usdc_balance()
+                # Update holdings after trade
+                await self.update_holdings()
 
         except Exception as e:
             logger.error(f"Error executing trade: {str(e)}", exc_info=True)
@@ -280,8 +513,8 @@ class TradeExecutorService:
             # Remove from active trades
             self.active_trades.pop(symbol, None)
             
-            # Update balance
-            self.update_usdc_balance()
+            # Update holdings after trade
+            await self.update_holdings()
             
         except Exception as e:
             logger.error(f"Error closing position for {symbol}: {str(e)}", exc_info=True)
@@ -318,46 +551,6 @@ class TradeExecutorService:
         except Exception as e:
             logger.error(f"Error in trade monitoring: {str(e)}", exc_info=True)
 
-    async def setup_pubsub(self):
-        """Set up Redis pubsub connection"""
-        try:
-            # Verify Redis connection
-            if not self.redis or not await self.redis.ping():
-                logger.error("Redis connection not available for pubsub setup")
-                return False
-
-            # Close existing pubsub if any
-            if self.pubsub:
-                logger.debug("Closing existing pubsub connection")
-                await self.pubsub.close()
-                self.pubsub = None
-
-            # Create new pubsub instance
-            logger.debug("Creating new pubsub instance")
-            self.pubsub = self.redis.pubsub()
-            
-            # Subscribe to channel
-            logger.debug("Subscribing to trading_signals channel")
-            await self.pubsub.subscribe('trading_signals')
-            
-            # Get first message to confirm subscription
-            logger.debug("Waiting for subscription confirmation message")
-            message = await self.pubsub.get_message(timeout=1.0)
-            
-            if message and message['type'] == 'subscribe':
-                logger.info("Successfully subscribed to trading_signals channel")
-                return True
-            else:
-                logger.error(f"Unexpected subscription response: {message}")
-                return False
-
-        except Exception as e:
-            logger.error(f"Error in pubsub setup: {str(e)}", exc_info=True)
-            if self.pubsub:
-                await self.pubsub.close()
-                self.pubsub = None
-            return False
-
     async def process_trading_signals(self):
         """Process trading signals from Redis"""
         logger.debug("Starting trading signals processing...")
@@ -389,7 +582,7 @@ class TradeExecutorService:
 
                 # Process messages
                 try:
-                    logger.debug("Waiting for trading signals...")
+                    logger.debug("Waiting for messages...")
                     message = await self.pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
                     
                     if message:
@@ -398,12 +591,16 @@ class TradeExecutorService:
                             try:
                                 logger.debug(f"Raw message data: {message['data']}")
                                 signal = json.loads(message['data'])
+                                logger.info(f"Processing trading signal for {signal['symbol']}")
                                 await self.execute_trade(signal)
                             except json.JSONDecodeError as e:
                                 logger.error(f"Failed to parse trading signal: {e}")
                                 logger.error(f"Invalid JSON data: {message['data']}")
+                            except KeyError as e:
+                                logger.error(f"Missing required field in signal: {e}")
+                                logger.error(f"Signal data: {signal}")
                             except Exception as e:
-                                logger.error(f"Error processing trading signal: {str(e)}", exc_info=True)
+                                logger.error(f"Error processing trading signal: {e}", exc_info=True)
                 except Exception as e:
                     logger.error(f"Error getting message from pubsub: {str(e)}")
                     self.pubsub = None  # Force pubsub reconnection
@@ -471,7 +668,8 @@ class TradeExecutorService:
             if not await self.connect_redis(max_retries=15, retry_delay=2):
                 raise Exception("Failed to establish initial Redis connection")
             
-            self.update_usdc_balance()
+            # Initialize async components
+            await self.initialize()
             
             # Create tasks for trading signals processing, Redis maintenance, and health check
             tasks = [
@@ -486,6 +684,9 @@ class TradeExecutorService:
         except Exception as e:
             logger.error(f"Error in Trade Executor Service: {str(e)}")
         finally:
+            # Cleanup positions before stopping
+            logger.info("Cleaning up positions before stopping...")
+            await self.cleanup_positions()
             await self.stop()
 
     async def stop(self):
