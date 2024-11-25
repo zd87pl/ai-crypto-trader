@@ -61,6 +61,7 @@ class AIAnalyzerService:
         self.pubsub = None
         self.running = True
         self.market_data = {}
+        self.social_data = {}
         self.last_analysis_time = {}
         
         # Get service port from environment variable
@@ -123,19 +124,23 @@ class AIAnalyzerService:
             logger.debug("Creating new pubsub instance")
             self.pubsub = self.redis.pubsub()
             
-            # Subscribe to channel
-            logger.debug("Subscribing to market_updates channel")
-            await self.pubsub.subscribe('market_updates')
+            # Subscribe to channels
+            logger.debug("Subscribing to market_updates and social_updates channels")
+            await self.pubsub.subscribe('market_updates', 'social_updates')
             
-            # Get first message to confirm subscription
-            logger.debug("Waiting for subscription confirmation message")
-            message = await self.pubsub.get_message(timeout=1.0)
+            # Get first messages to confirm subscriptions
+            logger.debug("Waiting for subscription confirmation messages")
+            subscribed_count = 0
+            while subscribed_count < 2:  # Wait for both subscriptions
+                message = await self.pubsub.get_message(timeout=1.0)
+                if message and message['type'] == 'subscribe':
+                    subscribed_count += 1
             
-            if message and message['type'] == 'subscribe':
-                logger.info("Successfully subscribed to market_updates channel")
+            if subscribed_count == 2:
+                logger.info("Successfully subscribed to all channels")
                 return True
             else:
-                logger.error(f"Unexpected subscription response: {message}")
+                logger.error("Failed to subscribe to all channels")
                 return False
 
         except Exception as e:
@@ -144,6 +149,67 @@ class AIAnalyzerService:
                 await self.pubsub.close()
                 self.pubsub = None
             return False
+
+    def get_market_context(self, symbol: str) -> str:
+        """Generate market context description"""
+        try:
+            # Get overall market sentiment
+            market_sentiment = "neutral"  # Default
+            if symbol in self.market_data:
+                data = self.market_data[symbol]
+                
+                # Determine sentiment based on multiple factors
+                bullish_signals = 0
+                bearish_signals = 0
+                
+                # Technical indicators
+                if data['rsi'] > 70: bearish_signals += 1
+                elif data['rsi'] < 30: bullish_signals += 1
+                
+                if data['macd'] > 0: bullish_signals += 1
+                elif data['macd'] < 0: bearish_signals += 1
+                
+                if data['williams_r'] > -20: bearish_signals += 1
+                elif data['williams_r'] < -80: bullish_signals += 1
+                
+                # Price action
+                for timeframe in ['1m', '3m', '5m']:
+                    change_key = f'price_change_{timeframe}'
+                    if data[change_key] > 0: bullish_signals += 1
+                    elif data[change_key] < 0: bearish_signals += 1
+                
+                # Determine overall sentiment
+                if bullish_signals > bearish_signals + 2:
+                    market_sentiment = "strongly bullish"
+                elif bullish_signals > bearish_signals:
+                    market_sentiment = "moderately bullish"
+                elif bearish_signals > bullish_signals + 2:
+                    market_sentiment = "strongly bearish"
+                elif bearish_signals > bullish_signals:
+                    market_sentiment = "moderately bearish"
+                
+            # Get social context
+            social_context = "No significant social activity"
+            if symbol in self.social_data:
+                social = self.social_data[symbol]
+                if social['metrics']['social_sentiment'] > 0.6:
+                    social_context = "Very positive social sentiment"
+                elif social['metrics']['social_sentiment'] > 0.5:
+                    social_context = "Positive social sentiment"
+                elif social['metrics']['social_sentiment'] < 0.4:
+                    social_context = "Negative social sentiment"
+                elif social['metrics']['social_sentiment'] < 0.3:
+                    social_context = "Very negative social sentiment"
+                
+                # Add engagement context
+                if social['metrics']['social_engagement'] > self.config['lunarcrush']['min_engagement']:
+                    social_context += f" with high engagement ({social['metrics']['social_engagement']} interactions)"
+            
+            return f"Current market sentiment appears {market_sentiment}. {social_context}."
+            
+        except Exception as e:
+            logger.error(f"Error generating market context: {str(e)}")
+            return "Market context unavailable"
 
     async def analyze_market_data(self, market_update):
         """Analyze market data using AITrader"""
@@ -158,18 +224,55 @@ class AIAnalyzerService:
                     logger.debug(f"Skipping analysis for {symbol}, last analysis was {time_since_last}s ago")
                     return
 
+            # Update market data cache
+            self.market_data[symbol] = market_update
+
+            # Get social data if available
+            social_metrics = {
+                'social_volume': 0,
+                'social_engagement': 0,
+                'social_contributors': 0,
+                'social_sentiment': 0.5,
+                'recent_news': "No recent news available"
+            }
+            
+            if symbol in self.social_data:
+                social = self.social_data[symbol]
+                social_metrics.update({
+                    'social_volume': social['metrics']['social_volume'],
+                    'social_engagement': social['metrics']['social_engagement'],
+                    'social_contributors': social['metrics']['social_contributors'],
+                    'social_sentiment': social['metrics']['social_sentiment']
+                })
+                
+                # Format recent news
+                if social['recent_news']:
+                    news_summary = []
+                    for news in social['recent_news'][:3]:  # Top 3 news items
+                        sentiment = "neutral"
+                        if news['sentiment'] > 0.6: sentiment = "positive"
+                        elif news['sentiment'] < 0.4: sentiment = "negative"
+                        news_summary.append(f"- {news['title']} ({sentiment} sentiment)")
+                    social_metrics['recent_news'] = "\n".join(news_summary)
+
+            # Generate market context
+            market_context = self.get_market_context(symbol)
+
+            # Combine data for analysis
+            analysis_data = {**market_update, **social_metrics, 'market_context': market_context}
+
             logger.info(f"Starting analysis for {symbol}")
-            logger.debug(f"Market update data: {json.dumps(market_update, indent=2)}")
+            logger.debug(f"Analysis data: {json.dumps(analysis_data, indent=2)}")
 
             # Use AITrader to analyze the trading opportunity
             logger.debug("Calling AITrader.analyze_trade_opportunity...")
-            analysis = await self.ai_trader.analyze_trade_opportunity(market_update)
+            analysis = await self.ai_trader.analyze_trade_opportunity(analysis_data)
             logger.debug(f"Received analysis from AITrader: {json.dumps(analysis, indent=2)}")
 
             # Add metadata
             analysis['timestamp'] = current_time.isoformat()
             analysis['symbol'] = symbol
-            analysis['market_data'] = market_update
+            analysis['market_data'] = analysis_data
 
             # Log the analysis
             logger.info(f"AI Analysis for {symbol}:")
@@ -192,9 +295,9 @@ class AIAnalyzerService:
         except Exception as e:
             logger.error(f"Error in AI analysis: {str(e)}", exc_info=True)
 
-    async def process_market_updates(self):
-        """Process market updates from Redis"""
-        logger.debug("Starting market updates processing...")
+    async def process_updates(self):
+        """Process market and social updates from Redis"""
+        logger.debug("Starting updates processing...")
         pubsub_retry_count = 0
         max_pubsub_retries = 10
         
@@ -231,17 +334,27 @@ class AIAnalyzerService:
                         if message['type'] == 'message':
                             try:
                                 logger.debug(f"Raw message data: {message['data']}")
-                                market_update = json.loads(message['data'])
-                                logger.info(f"Processing market update for {market_update['symbol']}")
-                                await self.analyze_market_data(market_update)
+                                data = json.loads(message['data'])
+                                
+                                # Handle different update types
+                                if message['channel'] == 'market_updates':
+                                    logger.info(f"Processing market update for {data['symbol']}")
+                                    await self.analyze_market_data(data)
+                                elif message['channel'] == 'social_updates':
+                                    logger.info(f"Processing social update for {data['symbol']}")
+                                    self.social_data[data['symbol']] = data['data']
+                                    # Trigger reanalysis with new social data
+                                    if data['symbol'] in self.market_data:
+                                        await self.analyze_market_data(self.market_data[data['symbol']])
+                                
                             except json.JSONDecodeError as e:
-                                logger.error(f"Failed to parse market update: {e}")
+                                logger.error(f"Failed to parse update: {e}")
                                 logger.error(f"Invalid JSON data: {message['data']}")
                             except KeyError as e:
-                                logger.error(f"Missing required field in market update: {e}")
-                                logger.error(f"Market update data: {market_update}")
+                                logger.error(f"Missing required field in update: {e}")
+                                logger.error(f"Update data: {data}")
                             except Exception as e:
-                                logger.error(f"Error processing market update: {e}", exc_info=True)
+                                logger.error(f"Error processing update: {e}", exc_info=True)
                 except Exception as e:
                     logger.error(f"Error getting message from pubsub: {str(e)}")
                     self.pubsub = None  # Force pubsub reconnection
@@ -250,7 +363,7 @@ class AIAnalyzerService:
                 await asyncio.sleep(0.1)
 
             except Exception as e:
-                logger.error(f"Error in process_market_updates: {str(e)}", exc_info=True)
+                logger.error(f"Error in process_updates: {str(e)}", exc_info=True)
                 if self.pubsub:
                     await self.pubsub.close()
                     self.pubsub = None
@@ -307,9 +420,9 @@ class AIAnalyzerService:
             if not await self.connect_redis(max_retries=15, retry_delay=2):
                 raise Exception("Failed to establish initial Redis connection")
             
-            # Create tasks for market updates processing, Redis maintenance, and health check
+            # Create tasks for updates processing, Redis maintenance, and health check
             tasks = [
-                asyncio.create_task(self.process_market_updates()),
+                asyncio.create_task(self.process_updates()),
                 asyncio.create_task(self.maintain_redis()),
                 asyncio.create_task(self.health_check_server())
             ]

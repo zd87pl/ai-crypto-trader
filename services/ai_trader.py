@@ -53,7 +53,13 @@ class AITrader:
                     price_change_1m=market_data['price_change_1m'],
                     price_change_3m=market_data['price_change_3m'],
                     price_change_5m=market_data['price_change_5m'],
-                    price_change_15m=market_data['price_change_15m']
+                    price_change_15m=market_data['price_change_15m'],
+                    social_volume=market_data.get('social_volume', 0),
+                    social_engagement=market_data.get('social_engagement', 0),
+                    social_contributors=market_data.get('social_contributors', 0),
+                    social_sentiment=market_data.get('social_sentiment', 0.5),
+                    recent_news=market_data.get('recent_news', 'No recent news available'),
+                    market_context=market_data.get('market_context', 'Market context unavailable')
                 )
             except KeyError as e:
                 logger.error(f"Error formatting prompt: {str(e)}")

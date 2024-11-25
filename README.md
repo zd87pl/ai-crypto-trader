@@ -19,8 +19,6 @@ This project serves as a technical demonstration of integrating AI with cryptocu
 
 ---
 
-An automated cryptocurrency trading system that uses AI for market analysis and trade execution.
-
 ## System Components
 
 ### 1. Market Monitor Service
@@ -28,79 +26,56 @@ An automated cryptocurrency trading system that uses AI for market analysis and 
 - Calculates technical indicators and price changes across multiple timeframes (1m, 3m, 5m, 15m)
 - Publishes market updates to Redis
 - Logs to: `logs/market_monitor.log`
-- Log format: `timestamp - level - [MarketMonitor] message`
 
-Example market monitor log:
-```
-2024-11-24 21:33:45,029 - INFO - [MarketMonitor] Market update - BTCUSDC: $42150.75 (24h volume: $1250000.25, RSI: 55.32)
-2024-11-24 21:33:45,030 - DEBUG - [MarketMonitor] Publishing market update to Redis: {...}
-```
+### 2. Social Monitor Service
+- Fetches social metrics and news from LunarCrush API
+- Tracks social sentiment, engagement, and volume
+- Monitors news impact and social trends
+- Caches data to respect API rate limits
+- Logs to: `logs/social_monitor.log`
 
-### 2. AI Analyzer Service
+### 3. AI Analyzer Service
 - Processes market updates using OpenAI GPT-4
-- Generates trading signals based on technical and AI analysis
+- Incorporates social sentiment and news analysis
+- Generates context-aware trading signals
 - Publishes trading signals to Redis
 - Logs to: `logs/ai_analyzer.log`
-- Log format: `timestamp - level - [AIAnalyzer] message`
 
-Example AI analyzer log:
-```
-2024-11-24 21:33:45,031 - INFO - [AIAnalyzer] Starting analysis for BTCUSDC
-2024-11-24 21:33:45,032 - DEBUG - [AIAnalyzer] Market update data: {...}
-2024-11-24 21:33:45,033 - INFO - [AIAnalyzer] AI Analysis for BTCUSDC:
-2024-11-24 21:33:45,034 - INFO - [AIAnalyzer] Decision: BUY
-2024-11-24 21:33:45,035 - INFO - [AIAnalyzer] Confidence: 0.85
-2024-11-24 21:33:45,036 - INFO - [AIAnalyzer] Reasoning: Strong uptrend with positive momentum
-```
-
-### 3. Trade Executor Service
+### 4. Trade Executor Service
 - Executes trades based on AI analysis signals
 - Manages positions and risk
 - Updates portfolio holdings
 - Logs to: `logs/trade_executor.log`
-- Log format: `timestamp - level - [TradeExecutor] message`
 
-Example trade executor log:
-```
-2024-11-24 21:33:45,037 - INFO - [TradeExecutor] Processing trading signal for BTCUSDC
-2024-11-24 21:33:45,038 - INFO - [TradeExecutor] Opening position:
-2024-11-24 21:33:45,039 - INFO - [TradeExecutor] Entry Price: $42150.75
-2024-11-24 21:33:45,040 - INFO - [TradeExecutor] Quantity: 0.5
-2024-11-24 21:33:45,041 - INFO - [TradeExecutor] Stop Loss: $41308.24
-2024-11-24 21:33:45,042 - INFO - [TradeExecutor] Take Profit: $43836.78
-```
+## Environment Setup
 
-## Configuration
+1. Create a `.env` file with the following credentials:
+```env
+# Binance API credentials
+BINANCE_API_KEY=your_binance_api_key
+BINANCE_API_SECRET=your_binance_api_secret
 
-The system is configured through `config.json` with the following main sections:
+# OpenAI API credentials
+OPENAI_API_KEY=your_openai_api_key
 
-### Trading Parameters
-```json
-{
-    "min_volume_usdc": 50000,
-    "min_price_change_pct": 0.5,
-    "position_size": 0.4,
-    "max_positions": 5,
-    "stop_loss_pct": 2.0,
-    "take_profit_pct": 4.0,
-    "min_trade_amount": 40,
-    "ai_analysis_interval": 60,
-    "ai_confidence_threshold": 0.7
-}
+# LunarCrush API credentials
+LUNARCRUSH_API_KEY=your_lunarcrush_api_key
+
+# Service ports
+MARKET_MONITOR_PORT=8001
+TRADE_EXECUTOR_PORT=8002
+AI_ANALYZER_PORT=8003
+STRATEGY_EVOLUTION_PORT=8004
+SOCIAL_MONITOR_PORT=8005
+
+# Redis configuration
+REDIS_HOST=redis
+REDIS_PORT=6379
 ```
 
-### OpenAI Configuration
-```json
-{
-    "model": "gpt-4o",
-    "temperature": 0.7,
-    "max_tokens": 2000
-}
-```
+## Data Structures
 
-## Market Data Structure
-
-Market updates include:
+### Market Data
 ```json
 {
     "symbol": "BTCUSDC",
@@ -125,20 +100,46 @@ Market updates include:
 }
 ```
 
-## Trading Signals Structure
+### Social Data
+```json
+{
+    "symbol": "BTCUSDC",
+    "data": {
+        "metrics": {
+            "social_volume": 15000,
+            "social_engagement": 25000,
+            "social_contributors": 1200,
+            "social_sentiment": 0.75,
+            "twitter_volume": 8000,
+            "reddit_volume": 3000,
+            "news_volume": 150
+        },
+        "weighted_sentiment": 0.68,
+        "recent_news": [
+            {
+                "title": "Major Partnership Announcement",
+                "sentiment": 0.85,
+                "engagement": 12000
+            }
+        ],
+        "timestamp": "2024-11-24T21:33:45.029Z"
+    }
+}
+```
 
-AI analysis produces:
+### Trading Signals
 ```json
 {
     "decision": "BUY",
     "confidence": 0.85,
-    "reasoning": "Strong uptrend with positive momentum",
+    "reasoning": "Strong technical indicators with positive social sentiment",
     "risk_level": "MEDIUM",
     "key_indicators": [
         "RSI trending up",
-        "MACD crossover",
-        "Strong volume"
+        "High social engagement",
+        "Positive news sentiment"
     ],
+    "social_impact": "High positive sentiment with strong engagement",
     "timestamp": "2024-11-24T21:33:45.033Z",
     "symbol": "BTCUSDC"
 }
@@ -150,28 +151,21 @@ AI analysis produces:
 - Connection issues with Binance: Retries with exponential backoff
 - Redis connection failures: Automatic reconnection attempts
 - Invalid market data: Logged and skipped
-```
-2024-11-24 21:33:45,100 - ERROR - [MarketMonitor] Failed to connect to Binance: Network error
-2024-11-24 21:33:45,101 - INFO - [MarketMonitor] Retrying connection in 5 seconds...
-```
+
+### Social Monitor Errors
+- LunarCrush API rate limits: Cached data with configurable duration
+- Missing social metrics: Falls back to default neutral values
+- News processing errors: Skips problematic items while preserving valid ones
 
 ### AI Analyzer Errors
 - OpenAI API failures: Logged with full error context
-- Missing market data fields: Detailed validation errors
+- Missing market/social data: Detailed validation errors
 - Redis publishing errors: Automatic retry mechanism
-```
-2024-11-24 21:33:45,200 - ERROR - [AIAnalyzer] OpenAI API error: Invalid model specified
-2024-11-24 21:33:45,201 - ERROR - [AIAnalyzer] Missing required field in market data: price_change_1m
-```
 
 ### Trade Executor Errors
 - Insufficient balance: Logged and trade skipped
 - Order placement failures: Full error context with retry attempts
 - Position management errors: Detailed error tracking
-```
-2024-11-24 21:33:45,300 - ERROR - [TradeExecutor] Insufficient balance for trade
-2024-11-24 21:33:45,301 - ERROR - [TradeExecutor] Order placement failed: MIN_NOTIONAL
-```
 
 ## Monitoring and Debugging
 
@@ -182,23 +176,23 @@ AI analysis produces:
 
 ### Common Issues and Solutions
 
-1. Missing Price Changes
+1. LunarCrush API Rate Limits
 ```
-ERROR - [AIAnalyzer] Error during analysis: 'price_change_1m'
+ERROR - [SocialMonitor] Rate limit exceeded
 ```
-Solution: Verify market monitor is calculating all timeframe changes correctly
+Solution: Adjust cache_duration in config.json
 
-2. OpenAI API Errors
+2. Missing Social Data
+```
+ERROR - [AIAnalyzer] Missing social metrics for symbol
+```
+Solution: Verify LunarCrush API key and symbol support
+
+3. OpenAI API Errors
 ```
 ERROR - [AIAnalyzer] OpenAI API error: Invalid model specified
 ```
 Solution: Check OpenAI configuration and API key validity
-
-3. Trade Execution Failures
-```
-ERROR - [TradeExecutor] Amount too small to sell: 0.00029202 BNB (minimum: 0.001)
-```
-Solution: Verify minimum trade amounts in configuration
 
 ## Performance Monitoring
 
@@ -206,6 +200,7 @@ The system tracks:
 - Portfolio value updates
 - Trade success rates
 - API response times
+- Social sentiment accuracy
 - Error frequencies
 - System resource usage
 
@@ -213,4 +208,4 @@ Example monitoring log:
 ```
 2024-11-24 21:33:45,400 - INFO - [TradeExecutor] Updated holdings - Total Portfolio Value: $257.65
 2024-11-24 21:33:45,401 - INFO - [TradeExecutor] Available USDC: $1.18
-2024-11-24 21:33:45,402 - INFO - [TradeExecutor] Trade success rate: 75%
+2024-11-24 21:33:45,402 - INFO - [SocialMonitor] Social sentiment accuracy: 82%

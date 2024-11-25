@@ -8,7 +8,7 @@
         "take_profit_pct": 4.0,
         "min_trade_amount": 40,
         "ai_analysis_interval": 60,
-        "ai_confidence_threshold": 0.75,
+        "ai_confidence_threshold": 0.7,
         "price_precision": 4,
         "quantity_precision": 6,
         "candle_interval": "1m"
@@ -17,9 +17,42 @@
         "model": "gpt-4o",
         "temperature": 0.7,
         "max_tokens": 2000,
-        "analysis_prompt": "As a cryptocurrency trading expert, analyze the market conditions for {symbol} with:\n\nPrice: ${price:.8f}\n24h Volume: ${volume:.2f}\n1m Price Change: {price_change_1m:.2f}%\n3m Price Change: {price_change_3m:.2f}%\n5m Price Change: {price_change_5m:.2f}%\n\nTechnical Indicators:\n- RSI: {rsi:.2f}\n- Stochastic K: {stoch:.2f}\n- MACD: {macd:.8f}\n- Williams %R: {williams_r:.2f}\n- Bollinger Band Position: {bb_position:.4f}\n\nMarket Trend:\n- Direction: {trend}\n- Strength: {trend_strength:.4f}\n\nProvide a trading decision based on:\n1. Price action and momentum indicators\n2. Trend analysis and technical indicators\n3. Volume analysis\n4. Risk assessment\n\nRespond with a JSON object containing:\n- decision: 'BUY', 'SELL', or 'HOLD'\n- confidence: value between 0 and 1\n- reasoning: detailed explanation of the analysis\n- risk_level: 'LOW', 'MEDIUM', or 'HIGH'\n- key_indicators: list of most influential indicators for this decision",
+        "analysis_prompt": "As a cryptocurrency trading expert, analyze the market conditions for {symbol} with:\n\nPrice Action:\nPrice: ${price:.8f}\n24h Volume: ${volume:.2f}\n1m Change: {price_change_1m:.2f}%\n3m Change: {price_change_3m:.2f}%\n5m Change: {price_change_5m:.2f}%\n15m Change: {price_change_15m:.2f}%\n\nTechnical Indicators:\n- RSI: {rsi:.2f}\n- Stochastic K: {stoch:.2f}\n- MACD: {macd:.8f}\n- Williams %R: {williams_r:.2f}\n- Bollinger Band Position: {bb_position:.4f}\n\nMarket Trend:\n- Direction: {trend}\n- Strength: {trend_strength:.4f}\n\nSocial Metrics:\n- Volume: {social_volume}\n- Engagement: {social_engagement}\n- Contributors: {social_contributors}\n- Sentiment: {social_sentiment}\n\nRecent News:\n{recent_news}\n\nMarket Context:\n{market_context}\n\nProvide a trading decision based on:\n1. Price action and momentum indicators\n2. Trend analysis and technical indicators\n3. Social sentiment and news impact\n4. Volume analysis\n5. Risk assessment\n\nRespond with a JSON object containing:\n- decision: 'BUY', 'SELL', or 'HOLD'\n- confidence: value between 0 and 1\n- reasoning: detailed explanation of the analysis\n- risk_level: 'LOW', 'MEDIUM', or 'HIGH'\n- key_indicators: list of most influential indicators for this decision",
         "risk_prompt": "Analyze risk and position sizing for {symbol} trade with:\n\nAvailable Capital: ${capital:.2f}\nVolatility: {volatility:.2f}\nCurrent Price: ${price:.8f}\nTrend Strength: {trend_strength:.4f}\n\nProvide a JSON response with:\n- position_size: recommended position size as a decimal (0-1)\n- stop_loss_pct: recommended stop loss percentage\n- take_profit_pct: recommended take profit percentage\n- reasoning: detailed explanation of the recommendations",
         "market_prompt": "Analyze overall market conditions based on the following data:\n\n{market_data}\n\nProvide a JSON response with:\n- market_sentiment: 'BULLISH', 'BEARISH', or 'NEUTRAL'\n- top_opportunities: list of symbols with highest potential\n- risks: list of current market risks\n- reasoning: detailed explanation of the analysis"
+    },
+    "lunarcrush": {
+        "api_key": "",
+        "base_url": "https://lunarcrush.com/api/v4",
+        "endpoints": {
+            "assets": "/assets",
+            "market": "/market",
+            "feeds": "/feeds"
+        },
+        "update_interval": 300,
+        "metrics": {
+            "required": [
+                "social_volume",
+                "social_engagement",
+                "social_contributors",
+                "social_sentiment"
+            ],
+            "optional": [
+                "twitter_volume",
+                "reddit_volume",
+                "news_volume",
+                "search_volume"
+            ]
+        },
+        "sentiment_weights": {
+            "social_volume": 0.2,
+            "social_engagement": 0.3,
+            "social_contributors": 0.2,
+            "social_sentiment": 0.3
+        },
+        "cache_duration": 300,
+        "max_news_age": 3600,
+        "min_engagement": 1000
     },
     "evolution": {
         "min_sharpe_ratio": 1.2,
