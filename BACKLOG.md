@@ -141,13 +141,13 @@
 - [ ] **UI-03**: Implement strategy configuration UI
 - [ ] **UI-04**: Add manual trading override interface
 - [ ] **UI-05**: Create position management dashboard
-- [ ] **UI-06**: Add AI insights visualization
+- [x] **UI-06**: Add AI insights visualization
 - [ ] **UI-07**: Implement strategy evolution monitoring
-- [ ] **UI-08**: Add social metrics visualization dashboard
+- [x] **UI-08**: Add social metrics visualization dashboard
 - [ ] **UI-09**: Create customizable dashboard layouts
 - [ ] **UI-10**: Implement dark/light theme options
-- [ ] **UI-11**: Add mobile-responsive design for on-the-go monitoring
-- [ ] **UI-12**: Implement strategy comparison visualizations
+- [x] **UI-11**: Add mobile-responsive design for on-the-go monitoring
+- [x] **UI-12**: Implement strategy comparison visualizations
 
 ### Notifications
 - [ ] **NOT-01**: Add Telegram bot integration
@@ -355,7 +355,7 @@
 2. ✅ **BACK-01/02/09**: Create backtesting framework with historical social data
 3. ✅ **AI-05/06/09**: Add model versioning, tracking, and explainable AI
 4. ✅ **RISK-01/08/09**: Implement portfolio-wide risk management
-5. **UI-01/11/12**: Enhance dashboard with mobile responsive design and visualization
+5. ✅ **UI-01/06/08/11/12**: Enhance dashboard with mobile responsive design and visualization
 
 ## Medium-Term Goals (3-6 Months)
 

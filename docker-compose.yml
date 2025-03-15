@@ -162,16 +162,24 @@ services:
       - REDIS_PORT=${REDIS_PORT}
       - REDIS_PASSWORD=${REDIS_PASSWORD}
       - ENABLE_METRICS=true
+      - DASH_FONT_AWESOME_SERVE_LOCALLY=true
     ports:
       - "8050:8050"
     volumes:
       - ./config.json:/app/config.json
       - ./logs:/app/logs
+      - ./static:/app/static
     networks:
       - crypto-net
     depends_on:
       redis:
         condition: service_healthy
+      portfolio-risk:
+        condition: service_started
+      ai-explainability:
+        condition: service_started
+      model-registry:
+        condition: service_started
     healthcheck:
       test: ["CMD", "nc", "-z", "crypto-dashboard", "8050"]
       interval: 30s

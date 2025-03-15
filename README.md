@@ -27,13 +27,34 @@ The project includes a modern, interactive dashboard that provides real-time ins
 
 ### Dashboard Features
 
+#### General Features
+- **Mobile Responsive Design**: Optimized for all devices from smartphones to desktop monitors
+- **Interactive Navigation**: Quick access to trading, portfolio, AI models, and risk sections
+- **Real-time Updates**: All data refreshes automatically at configurable intervals
+
+#### Trading Analytics
 - **Real-time Price Charts**: Interactive candlestick charts with technical indicators (RSI, MACD, Bollinger Bands)
-- **Portfolio Overview**: Track total value, daily change, and asset allocation
 - **Trading Signals**: View recent trading signals with confidence levels and reasoning
 - **Trade History**: Monitor executed trades and performance
 - **Social Sentiment Analysis**: Track social media sentiment, volume, engagement, and contributors
 - **News Feed**: Latest crypto news affecting your trading pairs
+
+#### Portfolio Management
+- **Portfolio Overview**: Track total value, daily change, and asset allocation
 - **Performance Metrics**: Visual representation of portfolio growth over time
+- **Asset Allocation**: Monitor distribution of investments across different cryptocurrencies
+
+#### AI Model Insights
+- **Model Performance**: Track accuracy, profit factor, and trade counts over time
+- **Version Comparison**: Compare metrics across different AI model versions
+- **Feature Importance**: Visualize which features have the most influence on trading decisions
+- **Explainable AI**: Detailed breakdowns of how the AI reaches trading decisions
+
+#### Risk Management
+- **Portfolio Risk Metrics**: Monitor VaR (Value at Risk) and maximum drawdown
+- **Correlation Analysis**: Visualize asset correlations with interactive heatmaps
+- **Position Sizing**: Risk-optimized position sizing with volatility and correlation adjustments
+- **Adaptive Stop-Loss**: Visualize how stop-losses adapt to changing market volatility
 
 ### Accessing the Dashboard
 

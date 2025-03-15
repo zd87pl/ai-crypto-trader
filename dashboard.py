@@ -8,7 +8,7 @@ Provides real-time visualization of trading data, signals, portfolio performance
 and social sentiment analysis.
 
 Author: zd87pl
-Version: 1.0.0
+Version: 1.1.0
 """
 
 import os
@@ -18,10 +18,11 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
+import plotly.express as px
 from plotly.subplots import make_subplots
 import dash
 from dash import dcc, html
-from dash.dependencies import Input, Output
+from dash.dependencies import Input, Output, State
 import dash_bootstrap_components as dbc
 from threading import Thread
 import time
@@ -50,6 +51,8 @@ class DataStore:
         self.signals = []
         self.trades = []
         self.portfolio = {}
+        self.ai_models = {}
+        self.risk_metrics = {}
         self.max_length = max_length
         
     def add_price_update(self, symbol, data):
@@ -72,6 +75,12 @@ class DataStore:
             
     def update_portfolio(self, portfolio):
         self.portfolio = portfolio
+        
+    def update_ai_models(self, models_data):
+        self.ai_models = models_data
+        
+    def update_risk_metrics(self, risk_data):
+        self.risk_metrics = risk_data
 
 # Create a data store instance
 data_store = DataStore()
@@ -79,7 +88,15 @@ data_store = DataStore()
 # Thread to listen to Redis updates
 def redis_listener():
     pubsub = r.pubsub()
-    pubsub.subscribe('market_updates', 'social_updates', 'trading_signals', 'trade_executions', 'portfolio_updates')
+    pubsub.subscribe(
+        'market_updates', 
+        'social_updates', 
+        'trading_signals', 
+        'trade_executions', 
+        'portfolio_updates', 
+        'ai_model_updates', 
+        'risk_metrics_updates'
+    )
     
     for message in pubsub.listen():
         if message['type'] == 'message':
@@ -106,6 +123,12 @@ def redis_listener():
                 elif channel == 'portfolio_updates':
                     data_store.update_portfolio(data)
                     
+                elif channel == 'ai_model_updates':
+                    data_store.update_ai_models(data)
+                    
+                elif channel == 'risk_metrics_updates':
+                    data_store.update_risk_metrics(data)
+                    
             except Exception as e:
                 print(f"Error processing message: {e}")
 
@@ -118,125 +141,296 @@ app = dash.Dash(
     __name__,
     external_stylesheets=[dbc.themes.CYBORG],
     meta_tags=[
-        {"name": "viewport", "content": "width=device-width, initial-scale=1"}
+        {"name": "viewport", "content": "width=device-width, initial-scale=1, maximum-scale=1.0, user-scalable=no"}
     ],
 )
 server = app.server
 app.title = "AI Crypto Trader Dashboard"
 
-# Define the layout
-app.layout = dbc.Container(
-    [
-        dbc.Row([
-            dbc.Col(html.H1("AI Crypto Trader Dashboard", className="text-center mt-4 mb-4"), width=12)
-        ]),
-        
-        # Market Overview
-        dbc.Row([
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader(html.H4("Portfolio Overview", className="text-center")),
-                    dbc.CardBody([
-                        dbc.Row([
-                            dbc.Col([
-                                html.Div(id="portfolio-value", className="d-flex justify-content-center align-items-center"),
-                                html.Div(id="portfolio-change", className="d-flex justify-content-center align-items-center mt-2")
-                            ], width=12),
-                        ]),
-                        dbc.Row([
-                            dbc.Col([
-                                html.Div(id="portfolio-assets", className="mt-3")
-                            ], width=12)
-                        ])
-                    ])
-                ], className="shadow mb-4")
-            ], width=12)
-        ]),
-        
-        # Price Charts and Social Data
-        dbc.Row([
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader([
-                        dbc.Row([
-                            dbc.Col(html.H4("Market Data", className="text-center"), width=8),
-                            dbc.Col([
-                                dcc.Dropdown(
-                                    id="symbol-selector",
-                                    options=[],
-                                    value=None,
-                                    placeholder="Select a trading pair",
-                                    className="mr-2"
-                                ),
-                            ], width=4),
-                        ])
-                    ]),
-                    dbc.CardBody([
-                        dcc.Graph(id="price-chart", style={"height": "500px"}),
-                    ])
-                ], className="shadow mb-4")
-            ], width=8),
-            
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader(html.H4("Social Sentiment", className="text-center")),
-                    dbc.CardBody([
-                        html.Div(id="social-metrics"),
-                        dcc.Graph(id="sentiment-chart", style={"height": "220px"}),
-                    ])
-                ], className="shadow mb-4"),
-                
-                dbc.Card([
-                    dbc.CardHeader(html.H4("Latest News", className="text-center")),
-                    dbc.CardBody([
-                        html.Div(id="news-feed", style={"overflow-y": "scroll", "height": "180px"})
-                    ])
-                ], className="shadow")
-            ], width=4)
-        ]),
-        
-        # Trading Signals and History
-        dbc.Row([
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader(html.H4("Recent Trading Signals", className="text-center")),
-                    dbc.CardBody([
-                        html.Div(id="signals-table", style={"height": "300px", "overflow-y": "scroll"})
-                    ])
-                ], className="shadow mb-4")
-            ], width=6),
-            
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader(html.H4("Recent Trades", className="text-center")),
-                    dbc.CardBody([
-                        html.Div(id="trades-table", style={"height": "300px", "overflow-y": "scroll"})
-                    ])
-                ], className="shadow mb-4")
-            ], width=6)
-        ]),
-        
-        # Performance Metrics
-        dbc.Row([
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader(html.H4("Performance Metrics", className="text-center")),
-                    dbc.CardBody([
-                        dcc.Graph(id="performance-chart", style={"height": "300px"}),
-                    ])
-                ], className="shadow mb-4")
-            ], width=12)
-        ]),
-        
-        # Refresh interval
-        dcc.Interval(id="refresh-interval", interval=5000, n_intervals=0),
-        
-        # Store current symbols
-        dcc.Store(id="available-symbols")
-    ],
-    fluid=True,
-    className="bg-dark text-light",
+# Define the navbar
+navbar = dbc.Navbar(
+    dbc.Container(
+        [
+            dbc.Row(
+                [
+                    dbc.Col(
+                        html.Img(
+                            # This would be replaced with your actual logo
+                            src="https://via.placeholder.com/40",
+                            height="40px",
+                            className="d-inline-block align-top"
+                        ),
+                        width="auto",
+                    ),
+                    dbc.Col(
+                        html.Span(
+                            "AI Crypto Trader",
+                            className="ms-2 navbar-brand"
+                        ),
+                        width="auto",
+                    ),
+                ],
+                align="center",
+                className="g-0",
+            ),
+            dbc.NavbarToggler(id="navbar-toggler", n_clicks=0),
+            dbc.Collapse(
+                dbc.Nav(
+                    [
+                        dbc.NavItem(dbc.NavLink("Trading", href="#trading")),
+                        dbc.NavItem(dbc.NavLink("Portfolio", href="#portfolio")),
+                        dbc.NavItem(dbc.NavLink("AI Models", href="#ai-models")),
+                        dbc.NavItem(dbc.NavLink("Risk", href="#risk")),
+                    ],
+                    className="ms-auto",
+                    navbar=True,
+                ),
+                id="navbar-collapse",
+                navbar=True,
+                is_open=False,
+            ),
+        ],
+        fluid=True,
+    ),
+    color="dark",
+    dark=True,
+    className="sticky-top mb-3",
 )
+
+# Define the layout
+app.layout = html.Div([
+    navbar,
+    dbc.Container(
+        [
+            # Main header section
+            dbc.Row([
+                dbc.Col(html.H1("AI Crypto Trader Dashboard", className="text-center mt-4 mb-4 d-none d-md-block"), width=12)
+            ]),
+            
+            # Portfolio Overview
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader([
+                            html.H4("Portfolio Overview", className="text-center"),
+                            html.Div([
+                                dbc.Button(
+                                    html.I(className="fas fa-sync-alt"),
+                                    id="refresh-portfolio",
+                                    color="link",
+                                    size="sm",
+                                    className="position-absolute top-0 end-0 mt-2 me-2"
+                                )
+                            ])
+                        ]),
+                        dbc.CardBody([
+                            dbc.Row([
+                                dbc.Col([
+                                    html.Div(id="portfolio-value", className="d-flex justify-content-center align-items-center"),
+                                    html.Div(id="portfolio-change", className="d-flex justify-content-center align-items-center mt-2")
+                                ], xs=12, md=6),
+                                dbc.Col([
+                                    html.Div(id="portfolio-risk", className="d-flex justify-content-center align-items-center flex-column")
+                                ], xs=12, md=6, className="mt-3 mt-md-0")
+                            ]),
+                            dbc.Row([
+                                dbc.Col([
+                                    html.Div(id="portfolio-assets", className="mt-3")
+                                ], width=12)
+                            ])
+                        ])
+                    ], className="shadow mb-4")
+                ], width=12)
+            ], id="portfolio"),
+            
+            # Price Charts and Social Data
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader([
+                            dbc.Row([
+                                dbc.Col(html.H4("Market Data", className="text-center"), xs=12, md=8),
+                                dbc.Col([
+                                    dcc.Dropdown(
+                                        id="symbol-selector",
+                                        options=[],
+                                        value=None,
+                                        placeholder="Select a trading pair",
+                                        className="mr-2"
+                                    ),
+                                ], xs=12, md=4, className="mt-2 mt-md-0"),
+                            ])
+                        ]),
+                        dbc.CardBody([
+                            dcc.Graph(id="price-chart", style={"height": "500px"}),
+                        ])
+                    ], className="shadow mb-4")
+                ], xs=12, lg=8, className="mb-4 mb-lg-0"),
+                
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader([
+                            html.H4("Social Sentiment", className="text-center"),
+                            dbc.Button(
+                                "Details",
+                                id="sentiment-details-btn",
+                                color="primary",
+                                size="sm",
+                                outline=True,
+                                className="position-absolute top-0 end-0 mt-2 me-2"
+                            )
+                        ]),
+                        dbc.CardBody([
+                            html.Div(id="social-metrics"),
+                            dcc.Graph(id="sentiment-chart", style={"height": "220px"}),
+                        ])
+                    ], className="shadow mb-4"),
+                    
+                    dbc.Card([
+                        dbc.CardHeader(html.H4("Latest News", className="text-center")),
+                        dbc.CardBody([
+                            html.Div(id="news-feed", style={"overflow-y": "scroll", "height": "180px"})
+                        ])
+                    ], className="shadow")
+                ], xs=12, lg=4)
+            ], id="trading"),
+            
+            # Trading Signals and History
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader([
+                            html.H4("Recent Trading Signals", className="text-center"),
+                            dbc.Button(
+                                "AI Explanation",
+                                id="ai-explanation-btn",
+                                color="success",
+                                size="sm",
+                                outline=True,
+                                className="position-absolute top-0 end-0 mt-2 me-2"
+                            )
+                        ]),
+                        dbc.CardBody([
+                            html.Div(id="signals-table", style={"height": "300px", "overflow-y": "scroll"})
+                        ])
+                    ], className="shadow mb-4")
+                ], xs=12, lg=6, className="mb-4 mb-lg-0"),
+                
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader(html.H4("Recent Trades", className="text-center")),
+                        dbc.CardBody([
+                            html.Div(id="trades-table", style={"height": "300px", "overflow-y": "scroll"})
+                        ])
+                    ], className="shadow mb-4")
+                ], xs=12, lg=6)
+            ]),
+            
+            # AI Model Performance and Comparison
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader(html.H4("AI Model Performance", className="text-center")),
+                        dbc.CardBody([
+                            dbc.Tabs([
+                                dbc.Tab([
+                                    dcc.Graph(id="ai-model-performance", style={"height": "300px"})
+                                ], label="Performance"),
+                                dbc.Tab([
+                                    dcc.Graph(id="ai-model-comparison", style={"height": "300px"})
+                                ], label="Comparison"),
+                                dbc.Tab([
+                                    html.Div(id="ai-model-details", className="mt-3")
+                                ], label="Details"),
+                            ])
+                        ])
+                    ], className="shadow mb-4")
+                ], width=12)
+            ], id="ai-models"),
+            
+            # Risk Management Section
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader(html.H4("Portfolio Risk Management", className="text-center")),
+                        dbc.CardBody([
+                            dbc.Tabs([
+                                dbc.Tab([
+                                    dbc.Row([
+                                        dbc.Col([
+                                            dcc.Graph(id="var-chart", style={"height": "300px"})
+                                        ], xs=12, lg=6),
+                                        dbc.Col([
+                                            dcc.Graph(id="stop-loss-chart", style={"height": "300px"})
+                                        ], xs=12, lg=6, className="mt-4 mt-lg-0")
+                                    ])
+                                ], label="VaR & Stop-Loss"),
+                                dbc.Tab([
+                                    dcc.Graph(id="correlation-heatmap", style={"height": "300px"})
+                                ], label="Correlations"),
+                                dbc.Tab([
+                                    html.Div(id="position-sizing", className="mt-3")
+                                ], label="Position Sizing"),
+                            ])
+                        ])
+                    ], className="shadow mb-4")
+                ], width=12)
+            ], id="risk"),
+            
+            # Performance Metrics
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader(html.H4("Performance Metrics", className="text-center")),
+                        dbc.CardBody([
+                            dcc.Graph(id="performance-chart", style={"height": "300px"}),
+                        ])
+                    ], className="shadow mb-4")
+                ], width=12)
+            ]),
+            
+            # Modals for detailed views
+            dbc.Modal(
+                [
+                    dbc.ModalHeader("AI Decision Explanation"),
+                    dbc.ModalBody([
+                        html.Div(id="ai-explanation-content")
+                    ]),
+                    dbc.ModalFooter(
+                        dbc.Button("Close", id="close-ai-explanation", className="ms-auto")
+                    ),
+                ],
+                id="ai-explanation-modal",
+                size="xl",
+                is_open=False,
+            ),
+            
+            dbc.Modal(
+                [
+                    dbc.ModalHeader("Social Sentiment Details"),
+                    dbc.ModalBody([
+                        html.Div(id="sentiment-details-content")
+                    ]),
+                    dbc.ModalFooter(
+                        dbc.Button("Close", id="close-sentiment-details", className="ms-auto")
+                    ),
+                ],
+                id="sentiment-details-modal",
+                size="lg",
+                is_open=False,
+            ),
+            
+            # Refresh interval
+            dcc.Interval(id="refresh-interval", interval=5000, n_intervals=0),
+            
+            # Store current symbols and other data
+            dcc.Store(id="available-symbols"),
+            dcc.Store(id="current-signal")
+        ],
+        fluid=True,
+        className="bg-dark text-light",
+    )
+], className="bg-dark text-light min-vh-100")
 
 # Callback to update symbol selector
 @app.callback(
@@ -917,6 +1111,1204 @@ def update_performance_chart(n):
     )
     
     return fig
+
+# Navbar toggle callback
+@app.callback(
+    Output("navbar-collapse", "is_open"),
+    [Input("navbar-toggler", "n_clicks")],
+    [State("navbar-collapse", "is_open")],
+)
+def toggle_navbar_collapse(n, is_open):
+    if n:
+        return not is_open
+    return is_open
+
+# Callback to update portfolio risk metrics
+@app.callback(
+    Output("portfolio-risk", "children"),
+    Input("refresh-interval", "n_intervals")
+)
+def update_portfolio_risk(n):
+    if not data_store.risk_metrics:
+        return html.Div([
+            html.H5("Risk Metrics", className="text-center mb-2"),
+            html.P("No risk data available", className="text-center")
+        ])
+        
+    # Extract risk metrics
+    var = data_store.risk_metrics.get('portfolio_var', 0) * 100
+    max_drawdown = data_store.risk_metrics.get('max_drawdown', 0) * 100
+    correlation_factor = data_store.risk_metrics.get('avg_correlation', 0)
+    
+    # Create risk cards
+    risk_cards = html.Div([
+        html.H5("Risk Metrics", className="text-center mb-3"),
+        dbc.Row([
+            dbc.Col([
+                html.Div([
+                    html.H6("VaR (95%)", className="text-center mb-1"),
+                    html.H4(f"{var:.2f}%", 
+                           className=f"text-center {'text-danger' if var > 5 else 'text-warning' if var > 3 else 'text-success'}")
+                ], className="mb-2")
+            ], width=6),
+            dbc.Col([
+                html.Div([
+                    html.H6("Max Drawdown", className="text-center mb-1"),
+                    html.H4(f"{max_drawdown:.2f}%",
+                           className=f"text-center {'text-danger' if max_drawdown > 15 else 'text-warning' if max_drawdown > 10 else 'text-success'}")
+                ], className="mb-2")
+            ], width=6)
+        ]),
+        dbc.Row([
+            dbc.Col([
+                html.Div([
+                    html.H6("Correlation", className="text-center mb-1"),
+                    html.H4(f"{correlation_factor:.2f}",
+                           className=f"text-center {'text-danger' if correlation_factor > 0.7 else 'text-warning' if correlation_factor > 0.5 else 'text-success'}")
+                ], className="mb-2")
+            ], width=12)
+        ])
+    ])
+    
+    return risk_cards
+
+# Callback to update AI model performance chart
+@app.callback(
+    Output("ai-model-performance", "figure"),
+    Input("refresh-interval", "n_intervals")
+)
+def update_ai_model_performance(n):
+    if not data_store.ai_models:
+        # Empty chart
+        fig = go.Figure()
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            margin={"t": 10, "r": 10, "l": 10, "b": 10},
+            showlegend=False,
+            xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)"),
+            yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)")
+        )
+        return fig
+
+    # Extract model performance data
+    model_history = data_store.ai_models.get('performance_history', [])
+    
+    if not model_history:
+        # Create mock data for demonstration
+        end_date = datetime.now()
+        days = 30
+        dates = [(end_date - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days, -1, -1)]
+        
+        accuracy = [0.65 + (np.sin(i/5) * 0.15) for i in range(days+1)]
+        profit_factor = [1.2 + (np.sin(i/4) * 0.4) for i in range(days+1)]
+        
+        model_history = [
+            {'date': date, 'accuracy': acc, 'profit_factor': pf, 'trades': 10 + i % 15} 
+            for i, (date, acc, pf) in enumerate(zip(dates, accuracy, profit_factor))
+        ]
+    
+    # Extract data for plotting
+    dates = [item.get('date') for item in model_history]
+    accuracy = [item.get('accuracy', 0) * 100 for item in model_history]
+    profit_factor = [item.get('profit_factor', 0) for item in model_history]
+    trades = [item.get('trades', 0) for item in model_history]
+    
+    # Create the figure with dual y-axis
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    
+    # Add accuracy line
+    fig.add_trace(
+        go.Scatter(
+            x=dates,
+            y=accuracy,
+            mode="lines",
+            name="Accuracy (%)",
+            line=dict(color="rgba(0, 255, 0, 0.7)", width=2)
+        ),
+        secondary_y=False
+    )
+    
+    # Add profit factor line
+    fig.add_trace(
+        go.Scatter(
+            x=dates,
+            y=profit_factor,
+            mode="lines",
+            name="Profit Factor",
+            line=dict(color="rgba(255, 165, 0, 0.7)", width=2)
+        ),
+        secondary_y=True
+    )
+    
+    # Add trade count as bars
+    fig.add_trace(
+        go.Bar(
+            x=dates,
+            y=trades,
+            name="Trades",
+            opacity=0.3,
+            marker=dict(color="rgba(100, 149, 237, 0.5)")
+        ),
+        secondary_y=False
+    )
+    
+    # Update layout
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin={"t": 10, "r": 10, "l": 10, "b": 10},
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hovermode="x unified"
+    )
+    
+    # Update axes titles
+    fig.update_yaxes(title_text="Accuracy (%) / Trades", secondary_y=False)
+    fig.update_yaxes(title_text="Profit Factor", secondary_y=True)
+    
+    return fig
+
+# Callback to update AI model comparison chart
+@app.callback(
+    Output("ai-model-comparison", "figure"),
+    Input("refresh-interval", "n_intervals")
+)
+def update_ai_model_comparison(n):
+    if not data_store.ai_models:
+        # Empty chart
+        fig = go.Figure()
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            margin={"t": 10, "r": 10, "l": 10, "b": 10},
+            showlegend=False,
+            xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)"),
+            yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)")
+        )
+        return fig
+    
+    # Extract model comparison data
+    model_versions = data_store.ai_models.get('versions', [])
+    
+    if not model_versions:
+        # Create mock data for demonstration
+        model_versions = [
+            {
+                'version_id': f'v1.{i}',
+                'accuracy': 0.6 + (i * 0.03),
+                'profit_factor': 1.2 + (i * 0.1),
+                'sharpe_ratio': 0.8 + (i * 0.15),
+                'trades_count': 100 + (i * 30),
+                'win_rate': 0.5 + (i * 0.02),
+                'avg_return': 0.015 + (i * 0.002)
+            } 
+            for i in range(5)
+        ]
+    
+    # Extract data for plotting
+    versions = [item.get('version_id') for item in model_versions]
+    accuracy = [item.get('accuracy', 0) * 100 for item in model_versions]
+    profit_factor = [item.get('profit_factor', 0) for item in model_versions]
+    sharpe_ratio = [item.get('sharpe_ratio', 0) for item in model_versions]
+    win_rate = [item.get('win_rate', 0) * 100 for item in model_versions]
+    avg_return = [item.get('avg_return', 0) * 100 for item in model_versions]
+    
+    # Create the comparison chart
+    fig = go.Figure()
+    
+    # Add traces for each metric
+    fig.add_trace(
+        go.Bar(
+            x=versions,
+            y=accuracy,
+            name="Accuracy (%)",
+            marker_color="rgba(0, 255, 0, 0.7)"
+        )
+    )
+    
+    fig.add_trace(
+        go.Bar(
+            x=versions,
+            y=profit_factor,
+            name="Profit Factor",
+            marker_color="rgba(255, 165, 0, 0.7)"
+        )
+    )
+    
+    fig.add_trace(
+        go.Bar(
+            x=versions,
+            y=sharpe_ratio,
+            name="Sharpe Ratio",
+            marker_color="rgba(0, 191, 255, 0.7)"
+        )
+    )
+    
+    fig.add_trace(
+        go.Bar(
+            x=versions,
+            y=win_rate,
+            name="Win Rate (%)",
+            marker_color="rgba(255, 99, 71, 0.7)"
+        )
+    )
+    
+    fig.add_trace(
+        go.Bar(
+            x=versions,
+            y=avg_return,
+            name="Avg Return (%)",
+            marker_color="rgba(186, 85, 211, 0.7)"
+        )
+    )
+    
+    # Update layout
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin={"t": 10, "r": 10, "l": 10, "b": 10},
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        barmode='group',
+        bargap=0.15,
+        bargroupgap=0.1
+    )
+    
+    return fig
+
+# Callback to update AI model details
+@app.callback(
+    Output("ai-model-details", "children"),
+    Input("refresh-interval", "n_intervals")
+)
+def update_ai_model_details(n):
+    if not data_store.ai_models:
+        return html.P("No AI model data available")
+    
+    # Extract current model data
+    current_model = data_store.ai_models.get('current_model', {})
+    
+    if not current_model:
+        # For demonstration purposes
+        current_model = {
+            'version_id': 'v1.4',
+            'version_name': 'LSTM-Transformer-Hybrid',
+            'created_at': '2025-03-12 14:30:45',
+            'accuracy': 0.72,
+            'profit_factor': 1.6,
+            'sharpe_ratio': 1.4,
+            'trades_count': 230,
+            'win_rate': 0.58,
+            'avg_return': 0.021,
+            'features': ['price_action', 'technical_indicators', 'social_sentiment', 'volatility'],
+            'description': 'Hybrid model combining LSTM for sequential price data with transformer architecture for social metric analysis.'
+        }
+    
+    # Create the model details card
+    details_card = [
+        dbc.Row([
+            dbc.Col([
+                html.H5(f"Current Model: {current_model.get('version_name', 'Unknown')}", className="mb-3"),
+                html.Div([
+                    html.Strong("Version ID: "),
+                    html.Span(current_model.get('version_id', 'Unknown'))
+                ], className="mb-2"),
+                html.Div([
+                    html.Strong("Created: "),
+                    html.Span(current_model.get('created_at', 'Unknown'))
+                ], className="mb-2"),
+                html.Div([
+                    html.Strong("Description: "),
+                    html.Span(current_model.get('description', 'No description available'))
+                ], className="mb-2"),
+            ], xs=12, md=6),
+            
+            dbc.Col([
+                html.H5("Performance Metrics", className="mb-3"),
+                dbc.Row([
+                    dbc.Col([
+                        html.Div([
+                            html.Strong("Accuracy: "),
+                            html.Span(f"{current_model.get('accuracy', 0) * 100:.1f}%")
+                        ], className="mb-2"),
+                        html.Div([
+                            html.Strong("Win Rate: "),
+                            html.Span(f"{current_model.get('win_rate', 0) * 100:.1f}%")
+                        ], className="mb-2"),
+                        html.Div([
+                            html.Strong("Avg Return: "),
+                            html.Span(f"{current_model.get('avg_return', 0) * 100:.2f}%")
+                        ], className="mb-2"),
+                    ], width=6),
+                    
+                    dbc.Col([
+                        html.Div([
+                            html.Strong("Profit Factor: "),
+                            html.Span(f"{current_model.get('profit_factor', 0):.2f}")
+                        ], className="mb-2"),
+                        html.Div([
+                            html.Strong("Sharpe Ratio: "),
+                            html.Span(f"{current_model.get('sharpe_ratio', 0):.2f}")
+                        ], className="mb-2"),
+                        html.Div([
+                            html.Strong("Trades: "),
+                            html.Span(f"{current_model.get('trades_count', 0)}")
+                        ], className="mb-2"),
+                    ], width=6)
+                ])
+            ], xs=12, md=6, className="mt-3 mt-md-0")
+        ]),
+        
+        dbc.Row([
+            dbc.Col([
+                html.H5("Features Used", className="mb-3 mt-4"),
+                html.Div([
+                    dbc.Badge(feature, color="info", className="me-2 mb-2 p-2") 
+                    for feature in current_model.get('features', [])
+                ])
+            ], width=12)
+        ])
+    ]
+    
+    return details_card
+
+# Callback to update VaR chart
+@app.callback(
+    Output("var-chart", "figure"),
+    Input("refresh-interval", "n_intervals")
+)
+def update_var_chart(n):
+    if not data_store.risk_metrics:
+        # Empty chart
+        fig = go.Figure()
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            margin={"t": 10, "r": 10, "l": 10, "b": 10},
+            showlegend=False,
+            xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)"),
+            yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)")
+        )
+        return fig
+    
+    # Extract VaR history
+    var_history = data_store.risk_metrics.get('var_history', [])
+    
+    if not var_history:
+        # Create mock data for demonstration
+        end_date = datetime.now()
+        days = 30
+        dates = [(end_date - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days, -1, -1)]
+        
+        portfolio_var = [0.03 + (np.sin(i/10) * 0.015) for i in range(days+1)]
+        market_vol = [0.015 + (np.sin(i/7) * 0.01) for i in range(days+1)]
+        
+        var_history = [
+            {'date': date, 'portfolio_var': pvar, 'market_volatility': mvol} 
+            for date, pvar, mvol in zip(dates, portfolio_var, market_vol)
+        ]
+    
+    # Extract data for plotting
+    dates = [item.get('date') for item in var_history]
+    portfolio_var = [item.get('portfolio_var', 0) * 100 for item in var_history]
+    market_vol = [item.get('market_volatility', 0) * 100 for item in var_history]
+    
+    # Create the VaR chart
+    fig = go.Figure()
+    
+    # Add Portfolio VaR line
+    fig.add_trace(
+        go.Scatter(
+            x=dates,
+            y=portfolio_var,
+            mode="lines+markers",
+            name="Portfolio VaR (95%)",
+            line=dict(color="rgba(255, 99, 71, 0.8)", width=2)
+        )
+    )
+    
+    # Add Market Volatility line
+    fig.add_trace(
+        go.Scatter(
+            x=dates,
+            y=market_vol,
+            mode="lines",
+            name="Market Volatility",
+            line=dict(color="rgba(100, 149, 237, 0.6)", width=1.5, dash="dash")
+        )
+    )
+    
+    # Add threshold line at 5% VaR
+    fig.add_shape(
+        type="line",
+        x0=dates[0],
+        y0=5,
+        x1=dates[-1],
+        y1=5,
+        line=dict(color="rgba(255, 0, 0, 0.5)", width=1, dash="dot")
+    )
+    
+    # Add annotation for the threshold line
+    fig.add_annotation(
+        x=dates[0],
+        y=5.1,
+        text="Risk Threshold (5%)",
+        showarrow=False,
+        font=dict(size=10, color="rgba(255, 0, 0, 0.7)")
+    )
+    
+    # Update layout
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin={"t": 30, "r": 10, "l": 10, "b": 10},
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        title=dict(text="Value at Risk (VaR) Over Time", x=0.5),
+        xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)"),
+        yaxis=dict(
+            title="Percentage (%)",
+            showgrid=True,
+            gridcolor="rgba(255,255,255,0.1)"
+        ),
+        hovermode="x unified"
+    )
+    
+    return fig
+
+# Callback to update stop loss chart
+@app.callback(
+    Output("stop-loss-chart", "figure"),
+    Input("refresh-interval", "n_intervals"),
+    Input("symbol-selector", "value")
+)
+def update_stop_loss_chart(n, symbol):
+    if not data_store.risk_metrics or not symbol:
+        # Empty chart
+        fig = go.Figure()
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            margin={"t": 10, "r": 10, "l": 10, "b": 10},
+            showlegend=False,
+            xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)"),
+            yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)")
+        )
+        return fig
+    
+    # Extract stop loss history
+    stop_loss_data = data_store.risk_metrics.get('stop_loss_data', {}).get(symbol, [])
+    
+    if not stop_loss_data:
+        # Create mock data for demonstration
+        end_date = datetime.now()
+        days = 30
+        dates = [(end_date - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days, -1, -1)]
+        
+        price = [100 * (1 + np.cumsum([np.random.normal(0.001, 0.015) for _ in range(days+1)])[i]) for i in range(days+1)]
+        volatility = [0.015 + (np.sin(i/7) * 0.01) for i in range(days+1)]
+        adaptive_sl = [p * (1 - (0.02 + v * 2)) for p, v in zip(price, volatility)]
+        fixed_sl = [p * 0.97 for p in price]
+        
+        stop_loss_data = [
+            {
+                'date': date, 
+                'price': p, 
+                'adaptive_stop_loss': asl, 
+                'fixed_stop_loss': fsl,
+                'volatility': v
+            } 
+            for date, p, asl, fsl, v in zip(dates, price, adaptive_sl, fixed_sl, volatility)
+        ]
+    
+    # Extract data for plotting
+    dates = [item.get('date') for item in stop_loss_data]
+    price = [item.get('price', 0) for item in stop_loss_data]
+    adaptive_sl = [item.get('adaptive_stop_loss', 0) for item in stop_loss_data]
+    fixed_sl = [item.get('fixed_stop_loss', 0) for item in stop_loss_data]
+    
+    # Create the stop loss chart
+    fig = go.Figure()
+    
+    # Add price line
+    fig.add_trace(
+        go.Scatter(
+            x=dates,
+            y=price,
+            mode="lines",
+            name="Price",
+            line=dict(color="rgba(255, 255, 255, 0.8)", width=2)
+        )
+    )
+    
+    # Add adaptive stop loss line
+    fig.add_trace(
+        go.Scatter(
+            x=dates,
+            y=adaptive_sl,
+            mode="lines",
+            name="Adaptive Stop-Loss",
+            line=dict(color="rgba(255, 99, 71, 0.8)", width=2)
+        )
+    )
+    
+    # Add fixed stop loss line
+    fig.add_trace(
+        go.Scatter(
+            x=dates,
+            y=fixed_sl,
+            mode="lines",
+            name="Fixed Stop-Loss",
+            line=dict(color="rgba(100, 149, 237, 0.6)", width=1.5, dash="dash")
+        )
+    )
+    
+    # Create filled area between price and adaptive stop loss
+    fig.add_trace(
+        go.Scatter(
+            x=dates+dates[::-1],
+            y=price+adaptive_sl[::-1],
+            fill='toself',
+            fillcolor='rgba(255, 99, 71, 0.1)',
+            line=dict(color='rgba(255, 255, 255, 0)'),
+            showlegend=False,
+            hoverinfo='skip'
+        )
+    )
+    
+    # Update layout
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin={"t": 30, "r": 10, "l": 10, "b": 10},
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        title=dict(text=f"Adaptive Stop-Loss for {symbol}", x=0.5),
+        xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)"),
+        yaxis=dict(
+            title="Price",
+            showgrid=True,
+            gridcolor="rgba(255,255,255,0.1)"
+        ),
+        hovermode="x unified"
+    )
+    
+    return fig
+
+# Callback to update correlation heatmap
+@app.callback(
+    Output("correlation-heatmap", "figure"),
+    Input("refresh-interval", "n_intervals")
+)
+def update_correlation_heatmap(n):
+    if not data_store.risk_metrics:
+        # Empty chart
+        fig = go.Figure()
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            margin={"t": 10, "r": 10, "l": 10, "b": 10},
+            showlegend=False,
+            xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)"),
+            yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.1)")
+        )
+        return fig
+    
+    # Extract correlation data
+    corr_matrix = data_store.risk_metrics.get('correlation_matrix', {})
+    
+    if not corr_matrix:
+        # Create mock data for demonstration
+        assets = ['BTC-USDT', 'ETH-USDT', 'BNB-USDT', 'SOL-USDT', 'XRP-USDT', 'ADA-USDT']
+        n = len(assets)
+        
+        # Create a realistic correlation matrix (positive definite)
+        np.random.seed(42)
+        A = np.random.randn(n, n)
+        base_corr = A.dot(A.T)
+        # Normalize to correlation matrix
+        D = np.diag(np.sqrt(np.diag(base_corr)))
+        D_inv = np.linalg.inv(D)
+        corr = D_inv.dot(base_corr).dot(D_inv)
+        
+        # Ensure diagonal is 1
+        np.fill_diagonal(corr, 1)
+        
+        # Convert to dictionary format
+        corr_matrix = {
+            'assets': assets,
+            'matrix': corr.tolist()
+        }
+    
+    # Extract data for plotting
+    assets = corr_matrix.get('assets', [])
+    matrix = corr_matrix.get('matrix', [])
+    
+    # Create the correlation heatmap
+    fig = go.Figure(data=go.Heatmap(
+        z=matrix,
+        x=assets,
+        y=assets,
+        colorscale='RdBu_r',  # Red for positive, blue for negative correlations
+        zmid=0,
+        text=[[f"{val:.2f}" for val in row] for row in matrix],
+        texttemplate="%{text}",
+        textfont={"size": 10},
+        hovertemplate='%{y} to %{x}: %{z:.3f}<extra></extra>'
+    ))
+    
+    # Update layout
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin={"t": 30, "r": 10, "l": 10, "b": 10},
+        title=dict(text="Asset Correlation Matrix", x=0.5),
+        xaxis=dict(
+            title="",
+            showgrid=False,
+            tickangle=-45
+        ),
+        yaxis=dict(
+            title="",
+            showgrid=False
+        )
+    )
+    
+    return fig
+
+# Callback to update position sizing data
+@app.callback(
+    Output("position-sizing", "children"),
+    Input("refresh-interval", "n_intervals")
+)
+def update_position_sizing(n):
+    if not data_store.risk_metrics:
+        return html.P("No position sizing data available")
+    
+    # Extract position sizing data
+    position_data = data_store.risk_metrics.get('position_sizing', [])
+    
+    if not position_data:
+        # Create mock data for demonstration
+        position_data = [
+            {
+                'symbol': 'BTC-USDT',
+                'allocation': 0.30,
+                'volatility_factor': 1.8,
+                'correlation_adjustment': -0.12,
+                'risk_score': 0.85,
+                'max_position_size': 0.25,
+                'current_position_size': 0.18
+            },
+            {
+                'symbol': 'ETH-USDT',
+                'allocation': 0.25,
+                'volatility_factor': 1.5,
+                'correlation_adjustment': -0.08,
+                'risk_score': 0.78,
+                'max_position_size': 0.22,
+                'current_position_size': 0.20
+            },
+            {
+                'symbol': 'BNB-USDT',
+                'allocation': 0.15,
+                'volatility_factor': 1.2,
+                'correlation_adjustment': 0.05,
+                'risk_score': 0.65,
+                'max_position_size': 0.18,
+                'current_position_size': 0.12
+            },
+            {
+                'symbol': 'SOL-USDT',
+                'allocation': 0.12,
+                'volatility_factor': 2.1,
+                'correlation_adjustment': -0.15,
+                'risk_score': 0.92,
+                'max_position_size': 0.15,
+                'current_position_size': 0.10
+            },
+            {
+                'symbol': 'ADA-USDT',
+                'allocation': 0.10,
+                'volatility_factor': 1.4,
+                'correlation_adjustment': 0.10,
+                'risk_score': 0.72,
+                'max_position_size': 0.15,
+                'current_position_size': 0.08
+            },
+            {
+                'symbol': 'XRP-USDT',
+                'allocation': 0.08,
+                'volatility_factor': 1.1,
+                'correlation_adjustment': 0.12,
+                'risk_score': 0.60,
+                'max_position_size': 0.12,
+                'current_position_size': 0.05
+            }
+        ]
+    
+    # Create position sizing table
+    position_table = html.Div([
+        html.H5("Risk-Optimized Position Sizing", className="mb-3"),
+        html.P("Position sizes adjusted for volatility and correlation", className="text-muted mb-3"),
+        
+        # Header row
+        dbc.Row([
+            dbc.Col(html.Strong("Asset"), width=2),
+            dbc.Col(html.Strong("Allocation"), width=2),
+            dbc.Col(html.Strong("Risk Score"), width=2),
+            dbc.Col(html.Strong("Vol. Factor"), width=2),
+            dbc.Col(html.Strong("Corr. Adj."), width=2),
+            dbc.Col(html.Strong("Position Size"), width=2),
+        ], className="mb-2"),
+        
+        # Data rows
+        *[
+            dbc.Row([
+                dbc.Col(html.Span(item.get('symbol', '')), width=2),
+                dbc.Col([
+                    html.Span(f"{item.get('allocation', 0) * 100:.1f}%"),
+                ], width=2),
+                dbc.Col([
+                    html.Span(f"{item.get('risk_score', 0):.2f}",
+                              className=f"{'text-danger' if item.get('risk_score', 0) > 0.8 else 'text-warning' if item.get('risk_score', 0) > 0.6 else 'text-success'}")
+                ], width=2),
+                dbc.Col(html.Span(f"{item.get('volatility_factor', 0):.2f}"), width=2),
+                dbc.Col(html.Span(f"{item.get('correlation_adjustment', 0):.2f}"), width=2),
+                dbc.Col([
+                    dbc.Progress(
+                        value=(item.get('current_position_size', 0) / item.get('max_position_size', 1)) * 100,
+                        color="info",
+                        className="mb-1",
+                        style={"height": "8px"}
+                    ),
+                    html.Small(f"{item.get('current_position_size', 0) * 100:.1f}% / {item.get('max_position_size', 0) * 100:.1f}%")
+                ], width=2),
+            ], className="mb-2")
+            for item in position_data
+        ],
+        
+        html.Div([
+            html.Strong("Position Sizing Method: "),
+            html.Span(data_store.risk_metrics.get('position_sizing_method', 'equal_risk'))
+        ], className="mt-4 text-muted")
+    ])
+    
+    return position_table
+
+# Callbacks for modal functionality
+@app.callback(
+    Output("ai-explanation-modal", "is_open"),
+    [Input("ai-explanation-btn", "n_clicks"), Input("close-ai-explanation", "n_clicks")],
+    [State("ai-explanation-modal", "is_open")],
+)
+def toggle_ai_explanation_modal(open_clicks, close_clicks, is_open):
+    if open_clicks or close_clicks:
+        return not is_open
+    return is_open
+
+@app.callback(
+    Output("sentiment-details-modal", "is_open"),
+    [Input("sentiment-details-btn", "n_clicks"), Input("close-sentiment-details", "n_clicks")],
+    [State("sentiment-details-modal", "is_open")],
+)
+def toggle_sentiment_details_modal(open_clicks, close_clicks, is_open):
+    if open_clicks or close_clicks:
+        return not is_open
+    return is_open
+
+# Callback to update AI explanation content
+@app.callback(
+    Output("ai-explanation-content", "children"),
+    Input("ai-explanation-modal", "is_open"),
+    Input("current-signal", "data")
+)
+def update_ai_explanation_content(is_open, signal_data):
+    if not is_open or not signal_data:
+        return html.P("Select a signal to view explanation")
+    
+    # Extract explanation data
+    explanation = signal_data.get('explanation', {})
+    factor_weights = signal_data.get('factor_weights', {})
+    
+    if not explanation or not factor_weights:
+        # For demonstration purposes
+        explanation = {
+            'summary': 'BUY signal based on strong technical indicators and positive social sentiment.',
+            'technical_factors': 'RSI showing oversold conditions at 28.5. MACD showing bullish crossover. Price breaking above upper Bollinger Band suggesting strong momentum.',
+            'social_factors': 'Social sentiment is highly positive at 72.3, with increasing social volume and engagement over the past 24 hours. Contributing to a positive sentiment shift.',
+            'key_indicators': ['RSI', 'MACD', 'Bollinger Bands', 'Social Sentiment', 'Volume Trend'],
+            'risk_assessment': 'Medium risk due to overall market volatility. Suggested position size reduced by 20% from baseline.'
+        }
+        
+        factor_weights = {
+            'technical_indicators': {
+                'rsi': 0.25,
+                'macd': 0.22,
+                'bollinger_bands': 0.18,
+                'price_action': 0.20,
+                'other': 0.15
+            },
+            'price_action': {
+                'momentum': 0.45,
+                'volatility': 0.30,
+                'volume': 0.25
+            },
+            'social_metrics': {
+                'sentiment': 0.45,
+                'volume': 0.30,
+                'engagement': 0.25
+            },
+            'market_context': 0.35
+        }
+    
+    # Create AI explanation content
+    content = [
+        dbc.Row([
+            dbc.Col([
+                html.H4("Decision Explanation", className="mb-3"),
+                html.Div([
+                    html.H6("Summary", className="mb-2"),
+                    html.P(explanation.get('summary', 'No summary available'), className="mb-3"),
+                    
+                    html.H6("Technical Analysis", className="mb-2"),
+                    html.P(explanation.get('technical_factors', 'No technical analysis available'), className="mb-3"),
+                    
+                    html.H6("Social Metrics Analysis", className="mb-2"),
+                    html.P(explanation.get('social_factors', 'No social analysis available'), className="mb-3"),
+                    
+                    html.H6("Risk Assessment", className="mb-2"),
+                    html.P(explanation.get('risk_assessment', 'No risk assessment available'), className="mb-3"),
+                    
+                    html.H6("Key Indicators", className="mb-2"),
+                    html.Div([
+                        dbc.Badge(indicator, color="success", className="me-2 mb-2 p-2") 
+                        for indicator in explanation.get('key_indicators', [])
+                    ], className="mb-3"),
+                ])
+            ], xs=12, lg=6),
+            
+            dbc.Col([
+                html.H4("Factor Weights", className="mb-3"),
+                
+                # Technical Indicators Weights
+                html.H6("Technical Indicators", className="mb-2"),
+                *[
+                    dbc.Row([
+                        dbc.Col(html.Span(indicator.title().replace('_', ' ')), width=4),
+                        dbc.Col([
+                            dbc.Progress(
+                                value=weight * 100,
+                                color="info",
+                                className="mb-1",
+                                style={"height": "15px"}
+                            ),
+                        ], width=6),
+                        dbc.Col(html.Span(f"{weight * 100:.0f}%"), width=2),
+                    ], className="mb-2")
+                    for indicator, weight in factor_weights.get('technical_indicators', {}).items()
+                ],
+                
+                # Price Action Weights
+                html.H6("Price Action", className="mb-2 mt-4"),
+                *[
+                    dbc.Row([
+                        dbc.Col(html.Span(factor.title()), width=4),
+                        dbc.Col([
+                            dbc.Progress(
+                                value=weight * 100,
+                                color="success",
+                                className="mb-1",
+                                style={"height": "15px"}
+                            ),
+                        ], width=6),
+                        dbc.Col(html.Span(f"{weight * 100:.0f}%"), width=2),
+                    ], className="mb-2")
+                    for factor, weight in factor_weights.get('price_action', {}).items()
+                ],
+                
+                # Social Metrics Weights
+                html.H6("Social Metrics", className="mb-2 mt-4"),
+                *[
+                    dbc.Row([
+                        dbc.Col(html.Span(metric.title()), width=4),
+                        dbc.Col([
+                            dbc.Progress(
+                                value=weight * 100,
+                                color="warning",
+                                className="mb-1",
+                                style={"height": "15px"}
+                            ),
+                        ], width=6),
+                        dbc.Col(html.Span(f"{weight * 100:.0f}%"), width=2),
+                    ], className="mb-2")
+                    for metric, weight in factor_weights.get('social_metrics', {}).items()
+                ],
+                
+                # Market Context Weight
+                html.H6("Market Context", className="mb-2 mt-4"),
+                dbc.Row([
+                    dbc.Col(html.Span("Overall Impact"), width=4),
+                    dbc.Col([
+                        dbc.Progress(
+                            value=factor_weights.get('market_context', 0) * 100,
+                            color="danger",
+                            className="mb-1",
+                            style={"height": "15px"}
+                        ),
+                    ], width=6),
+                    dbc.Col(html.Span(f"{factor_weights.get('market_context', 0) * 100:.0f}%"), width=2),
+                ], className="mb-2"),
+            ], xs=12, lg=6, className="mt-4 mt-lg-0")
+        ])
+    ]
+    
+    return content
+
+# Callback to update sentiment details content
+@app.callback(
+    Output("sentiment-details-content", "children"),
+    Input("sentiment-details-modal", "is_open"),
+    Input("symbol-selector", "value")
+)
+def update_sentiment_details_content(is_open, symbol):
+    if not is_open or not symbol or symbol not in data_store.social_data:
+        return html.P("No sentiment data available for the selected symbol")
+    
+    # Extract social data
+    social_data = data_store.social_data.get(symbol, {})
+    
+    # Create detailed content for sentiment modal
+    content = [
+        html.H4(f"Social Sentiment Analysis for {symbol}", className="mb-4 text-center"),
+        
+        dbc.Row([
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardBody([
+                        html.H5("Sentiment Breakdown", className="mb-3"),
+                        
+                        # Detailed sentiment metrics
+                        dbc.Row([
+                            dbc.Col([
+                                html.Strong("Overall Sentiment:"),
+                                html.Span(f" {social_data.get('sentiment', 0):.1f}/100", 
+                                       className=f"{'text-success' if social_data.get('sentiment', 0) >= 60 else 'text-danger' if social_data.get('sentiment', 0) <= 40 else 'text-warning'}")
+                            ], width=12, className="mb-2"),
+                            
+                            dbc.Col([
+                                html.Strong("Positive Mentions:"),
+                                html.Span(f" {social_data.get('positive_mentions', 0):,}")
+                            ], width=6, className="mb-2"),
+                            
+                            dbc.Col([
+                                html.Strong("Negative Mentions:"),
+                                html.Span(f" {social_data.get('negative_mentions', 0):,}")
+                            ], width=6, className="mb-2"),
+                            
+                            dbc.Col([
+                                html.Strong("Neutral Mentions:"),
+                                html.Span(f" {social_data.get('neutral_mentions', 0):,}")
+                            ], width=6, className="mb-2"),
+                            
+                            dbc.Col([
+                                html.Strong("Sentiment Change:"),
+                                html.Span(f" {social_data.get('sentiment_change_24h', 0):+.1f}%", 
+                                       className=f"{'text-success' if social_data.get('sentiment_change_24h', 0) > 0 else 'text-danger' if social_data.get('sentiment_change_24h', 0) < 0 else ''}")
+                            ], width=6, className="mb-2"),
+                        ]),
+                        
+                        # Sentiment by source
+                        html.H6("Sentiment by Source", className="mt-4 mb-3"),
+                        *[
+                            dbc.Row([
+                                dbc.Col(html.Span(source.title()), width=4),
+                                dbc.Col([
+                                    dbc.Progress(
+                                        value=score,
+                                        color="success" if score >= 60 else "danger" if score <= 40 else "warning",
+                                        className="mb-1",
+                                        style={"height": "10px"}
+                                    ),
+                                ], width=6),
+                                dbc.Col(html.Span(f"{score:.1f}"), width=2),
+                            ], className="mb-2")
+                            for source, score in social_data.get('sentiment_by_source', {
+                                'twitter': 65.2,
+                                'reddit': 58.7,
+                                'news': 62.1,
+                                'blogs': 59.3
+                            }).items()
+                        ],
+                    ])
+                ], className="mb-3")
+            ], xs=12, lg=6),
+            
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardBody([
+                        html.H5("Engagement Metrics", className="mb-3"),
+                        
+                        # Detailed engagement metrics
+                        dbc.Row([
+                            dbc.Col([
+                                html.Strong("Total Social Volume:"),
+                                html.Span(f" {social_data.get('volume', 0):,}")
+                            ], width=12, className="mb-2"),
+                            
+                            dbc.Col([
+                                html.Strong("Social Engagement:"),
+                                html.Span(f" {social_data.get('engagement', 0):,}")
+                            ], width=6, className="mb-2"),
+                            
+                            dbc.Col([
+                                html.Strong("Contributors:"),
+                                html.Span(f" {social_data.get('contributors', 0):,}")
+                            ], width=6, className="mb-2"),
+                            
+                            dbc.Col([
+                                html.Strong("Volume Change:"),
+                                html.Span(f" {social_data.get('volume_change_24h', 0):+.1f}%",
+                                       className=f"{'text-success' if social_data.get('volume_change_24h', 0) > 0 else 'text-danger' if social_data.get('volume_change_24h', 0) < 0 else ''}")
+                            ], width=6, className="mb-2"),
+                            
+                            dbc.Col([
+                                html.Strong("Engagement Change:"),
+                                html.Span(f" {social_data.get('engagement_change_24h', 0):+.1f}%",
+                                       className=f"{'text-success' if social_data.get('engagement_change_24h', 0) > 0 else 'text-danger' if social_data.get('engagement_change_24h', 0) < 0 else ''}")
+                            ], width=6, className="mb-2"),
+                        ]),
+                        
+                        # Volume by source
+                        html.H6("Volume by Source", className="mt-4 mb-3"),
+                        *[
+                            dbc.Row([
+                                dbc.Col(html.Span(source.title()), width=4),
+                                dbc.Col([
+                                    dbc.Progress(
+                                        value=(volume / social_data.get('volume', 1)) * 100,
+                                        color="info",
+                                        className="mb-1",
+                                        style={"height": "10px"}
+                                    ),
+                                ], width=6),
+                                dbc.Col(html.Span(f"{volume:,}"), width=2),
+                            ], className="mb-2")
+                            for source, volume in social_data.get('volume_by_source', {
+                                'twitter': 12500,
+                                'reddit': 8700,
+                                'news': 3200,
+                                'blogs': 1800
+                            }).items()
+                        ],
+                    ])
+                ], className="mb-3")
+            ], xs=12, lg=6, className="mt-3 mt-lg-0"),
+        ]),
+        
+        # Trending keywords/topics
+        dbc.Row([
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardBody([
+                        html.H5("Trending Keywords & Topics", className="mb-3"),
+                        dbc.Row([
+                            dbc.Col([
+                                html.Div([
+                                    dbc.Badge(
+                                        topic['keyword'], 
+                                        color="primary", 
+                                        className="me-2 mb-2 p-2",
+                                        style={"fontSize": f"{10 + (topic['weight'] * 10)}px"}
+                                    )
+                                    for topic in social_data.get('trending_topics', [
+                                        {'keyword': 'partnerships', 'weight': 0.95},
+                                        {'keyword': 'adoption', 'weight': 0.85},
+                                        {'keyword': 'development', 'weight': 0.80},
+                                        {'keyword': 'bullish', 'weight': 0.75},
+                                        {'keyword': 'update', 'weight': 0.70},
+                                        {'keyword': 'technology', 'weight': 0.65},
+                                        {'keyword': 'price', 'weight': 0.60},
+                                        {'keyword': 'trading', 'weight': 0.55},
+                                        {'keyword': 'market', 'weight': 0.50},
+                                        {'keyword': 'future', 'weight': 0.45},
+                                        {'keyword': 'investment', 'weight': 0.40},
+                                        {'keyword': 'wallet', 'weight': 0.35},
+                                    ])
+                                ])
+                            ], width=12)
+                        ])
+                    ])
+                ])
+            ], width=12)
+        ])
+    ]
+    
+    return content
+
+# Callback to store current signal for explanation modal
+@app.callback(
+    Output("current-signal", "data"),
+    Input("signals-table", "children"),
+    State("symbol-selector", "value")
+)
+def store_current_signal(signals_children, symbol):
+    # In a real implementation, this would find the most recent signal
+    # for the selected symbol with explanation data
+    
+    # For demonstration, we'll create mock data
+    if not symbol:
+        return {}
+    
+    # Find signal with explanation data for this symbol
+    # (this is mock data since we don't have actual signals with explanation)
+    mock_signal = {
+        'symbol': symbol,
+        'action': 'BUY',
+        'timestamp': datetime.now().isoformat(),
+        'confidence': 0.82,
+        'price': 43250.75,
+        'explanation': {
+            'summary': f'BUY signal for {symbol} based on strong technical indicators and positive social sentiment.',
+            'technical_factors': 'RSI showing oversold conditions at 28.5. MACD showing bullish crossover. Price breaking above upper Bollinger Band suggesting strong momentum.',
+            'social_factors': 'Social sentiment is highly positive at 72.3, with increasing social volume and engagement over the past 24 hours. Contributing to a positive sentiment shift.',
+            'key_indicators': ['RSI', 'MACD', 'Bollinger Bands', 'Social Sentiment', 'Volume Trend'],
+            'risk_assessment': 'Medium risk due to overall market volatility. Suggested position size reduced by 20% from baseline.'
+        },
+        'factor_weights': {
+            'technical_indicators': {
+                'rsi': 0.25,
+                'macd': 0.22,
+                'bollinger_bands': 0.18,
+                'price_action': 0.20,
+                'other': 0.15
+            },
+            'price_action': {
+                'momentum': 0.45,
+                'volatility': 0.30,
+                'volume': 0.25
+            },
+            'social_metrics': {
+                'sentiment': 0.45,
+                'volume': 0.30,
+                'engagement': 0.25
+            },
+            'market_context': 0.35
+        }
+    }
+    
+    return mock_signal
 
 # Run the app
 if __name__ == "__main__":
