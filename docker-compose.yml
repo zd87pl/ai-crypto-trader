@@ -203,6 +203,67 @@ services:
       - tools
     # No auto-start - use docker-compose run backtesting python run_backtest.py [...]
 
+  # AI Model Services
+  model-registry:
+    build: .
+    container_name: crypto-model-registry
+    command: python3 run_ai_model_services.py --model-registry
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - SERVICE_PORT=${MODEL_REGISTRY_PORT}
+      - ENABLE_METRICS=true
+    ports:
+      - "${MODEL_REGISTRY_PORT}:${MODEL_REGISTRY_PORT}"
+    volumes:
+      - ./config.json:/app/config.json
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./models:/app/models
+    networks:
+      - crypto-net
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "nc", "-z", "crypto-model-registry", "${MODEL_REGISTRY_PORT}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  ai-explainability:
+    build: .
+    container_name: crypto-ai-explainability
+    command: python3 run_ai_model_services.py --explainability
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - SERVICE_PORT=${AI_EXPLAINABILITY_PORT}
+      - ENABLE_METRICS=true
+    ports:
+      - "${AI_EXPLAINABILITY_PORT}:${AI_EXPLAINABILITY_PORT}"
+    volumes:
+      - ./config.json:/app/config.json
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./explanations:/app/explanations
+    networks:
+      - crypto-net
+    depends_on:
+      redis:
+        condition: service_healthy
+      ai-analyzer:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "nc", "-z", "crypto-ai-explainability", "${AI_EXPLAINABILITY_PORT}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
   # Monitoring Stack
   prometheus:
     image: prom/prometheus:latest
@@ -311,6 +372,8 @@ volumes:
   logs:
   data:
   strategies:
+  models:
+  explanations:
   prometheus-data:
   grafana-data:
   elasticsearch-data:

@@ -88,6 +88,20 @@ python dashboard.py
 - Generates performance analytics and visualizations
 - Detailed documentation in `backtesting/README.md`
 
+### 7. Model Registry Service
+- Tracks AI model versions and performance metrics
+- Provides version control for trading models
+- Maintains a registry of all model versions
+- Enables model comparison and selection
+- Logs to: `logs/model_registry.log`
+
+### 8. AI Explainability Service
+- Enhances trading decisions with detailed explanations
+- Visualizes factor weights influencing decisions
+- Provides technical and social factors analysis
+- Explains the reasoning behind each trade
+- Logs to: `logs/ai_explainability.log`
+
 ## Environment Setup
 
 1. Create a `.env` file with the following credentials:
@@ -108,6 +122,8 @@ TRADE_EXECUTOR_PORT=8002
 AI_ANALYZER_PORT=8003
 STRATEGY_EVOLUTION_PORT=8004
 SOCIAL_MONITOR_PORT=8005
+MODEL_REGISTRY_PORT=8006
+AI_EXPLAINABILITY_PORT=8007
 
 # Redis configuration
 REDIS_HOST=redis
@@ -155,6 +171,12 @@ python services/trade_executor_service.py
 
 # Start the strategy evolution service
 python services/strategy_evolution_service.py
+
+# Start the model registry service
+python run_ai_model_services.py --model-registry
+
+# Start the AI explainability service
+python run_ai_model_services.py --explainability
 
 # Start the dashboard
 python dashboard.py
@@ -254,7 +276,31 @@ For more detailed instructions, see `backtesting/README.md`.
     ],
     "social_impact": "High positive sentiment with strong engagement",
     "timestamp": "2024-11-24T21:33:45.033Z",
-    "symbol": "BTCUSDC"
+    "symbol": "BTCUSDC",
+    "model_version": "ai_trader_gpt_4o_a1b2c3d4",
+    "model_id": "a1b2c3d4",
+    "explanation": {
+        "summary": "Strong bullish signals with technical indicators and social sentiment aligned",
+        "technical_factors": "RSI at 55.32 showing momentum, MACD positive and increasing, price breaking above resistance",
+        "social_factors": "High social engagement (25,000) with very positive sentiment (0.75), increasing social volume",
+        "key_indicators": ["RSI", "MACD", "Social sentiment", "Price action"],
+        "risk_assessment": "Medium risk due to some market volatility, but strong technical and social indicators support the trade"
+    },
+    "factor_weights": {
+        "technical_indicators": {
+            "rsi": 0.25,
+            "macd": 0.30,
+            "bollinger_bands": 0.15,
+            "price_action": 0.20,
+            "other": 0.10
+        },
+        "social_metrics": {
+            "sentiment": 0.50,
+            "volume": 0.30,
+            "engagement": 0.20
+        },
+        "market_context": 0.15
+    }
 }
 ```
 
