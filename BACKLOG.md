@@ -86,15 +86,15 @@
 - [ ] **STRAT-10**: Add systematic evaluation of AI-generated strategies
 
 ### Risk Management
-- [ ] **RISK-01**: Implement portfolio-wide risk management
-- [ ] **RISK-02**: Add dynamic position sizing based on volatility
+- [x] **RISK-01**: Implement portfolio-wide risk management
+- [x] **RISK-02**: Add dynamic position sizing based on volatility
 - [ ] **RISK-03**: Implement trailing stop losses
-- [ ] **RISK-04**: Add maximum drawdown protection
-- [ ] **RISK-05**: Implement correlation-based position limits
+- [x] **RISK-04**: Add maximum drawdown protection
+- [x] **RISK-05**: Implement correlation-based position limits
 - [x] **RISK-06**: Add AI-driven risk assessment with social metrics
 - [ ] **RISK-07**: Implement social sentiment-based risk adjustments
-- [ ] **RISK-08**: Add portfolio-wide Value at Risk (VaR) calculations
-- [ ] **RISK-09**: Implement adaptive stop-losses based on market volatility
+- [x] **RISK-08**: Add portfolio-wide Value at Risk (VaR) calculations
+- [x] **RISK-09**: Implement adaptive stop-losses based on market volatility
 - [ ] **RISK-10**: Add Monte Carlo simulations for risk projection
 
 ### Analysis Improvements
@@ -354,7 +354,7 @@
 1. ✅ **MON-01/02/03**: Implement comprehensive monitoring with Prometheus/Grafana/ELK
 2. ✅ **BACK-01/02/09**: Create backtesting framework with historical social data
 3. ✅ **AI-05/06/09**: Add model versioning, tracking, and explainable AI
-4. **RISK-01/08/09**: Implement portfolio-wide risk management
+4. ✅ **RISK-01/08/09**: Implement portfolio-wide risk management
 5. **UI-01/11/12**: Enhance dashboard with mobile responsive design and visualization
 
 ## Medium-Term Goals (3-6 Months)

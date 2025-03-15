@@ -13,6 +13,23 @@
         "quantity_precision": 6,
         "candle_interval": "1m"
     },
+    "risk_management": {
+        "max_portfolio_var": 0.05,
+        "confidence_level": 0.95,
+        "var_lookback_days": 30,
+        "max_portfolio_allocation": 0.25,
+        "correlation_threshold": 0.7,
+        "min_volatility_factor": 0.5,
+        "max_volatility_factor": 2.0,
+        "volatility_lookback_days": 14,
+        "max_drawdown_limit": 0.15,
+        "position_sizing_method": "equal_risk",
+        "core_position_limit": 0.5,
+        "satellite_position_limit": 0.2,
+        "portfolio_var_breach_action": "reduce_risk",
+        "adaptive_stop_loss_enabled": true,
+        "trailing_stop_loss_enabled": false
+    },
     "openai": {
         "model": "gpt-4o",
         "temperature": 0.7,

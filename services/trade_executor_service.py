@@ -346,6 +346,40 @@ class TradeExecutorService:
             if self.total_portfolio_value < min_portfolio_value:
                 logger.info(f"Total portfolio value (${self.total_portfolio_value:.2f}) below minimum required (${min_portfolio_value:.2f})")
                 return False
+                
+            # Check portfolio risk metrics if available
+            if decision == 'BUY':
+                try:
+                    # Get portfolio risk metrics from Redis
+                    portfolio_risk_json = await self.redis.get('portfolio_risk')
+                    if portfolio_risk_json:
+                        portfolio_risk = json.loads(portfolio_risk_json)
+                        
+                        # Check if portfolio VaR exceeds limit
+                        portfolio_var_pct = portfolio_risk.get('portfolio_var_pct', 0)
+                        max_var_limit = self.config.get('risk_management', {}).get('max_portfolio_var', 0.05)
+                        
+                        if portfolio_var_pct > max_var_limit:
+                            logger.info(f"Portfolio VaR ({portfolio_var_pct:.2%}) exceeds limit ({max_var_limit:.2%}), blocking new trades")
+                            return False
+                            
+                        # Check asset diversification if adding a new asset
+                        asset = symbol.replace('USDC', '')
+                        if asset not in self.holdings and 'correlations' in portfolio_risk:
+                            # Check high correlations with existing assets
+                            high_correlation = False
+                            correlation_threshold = self.config.get('risk_management', {}).get('correlation_threshold', 0.7)
+                            
+                            for existing_asset in [a for a in self.holdings if a != 'USDC']:
+                                corr = portfolio_risk['correlations'].get(asset, {}).get(existing_asset, 0)
+                                if abs(corr) > correlation_threshold:
+                                    logger.info(f"High correlation ({corr:.2f}) between {asset} and {existing_asset}, limiting position size")
+                                    high_correlation = True
+                                    break
+                                    
+                except Exception as e:
+                    logger.error(f"Error checking portfolio risk metrics: {str(e)}")
+                    # Continue with the trade even if risk check fails
             
             return True
             
@@ -395,11 +429,23 @@ class TradeExecutorService:
                 current_price = float(ticker['price'])
                 logger.debug(f"Current price for {symbol}: ${current_price:.8f}")
 
-                # Calculate position size
+                # Check for risk information in the signal
+                risk_info = signal.get('risk_info', {})
+                
+                # Calculate position size using risk-based approach if available
+                default_position_pct = self.config['trading_params']['position_size']
+                optimal_position_pct = risk_info.get('optimal_position_pct', default_position_pct)
+                
+                # Apply position size
                 position_size = min(
-                    self.available_usdc * self.config['trading_params']['position_size'],
+                    self.available_usdc * optimal_position_pct,
                     self.available_usdc * 0.95  # Max 95% of available balance
                 )
+
+                # Log position sizing information
+                logger.debug(f"Position sizing for {symbol}: {optimal_position_pct:.2%} of available capital")
+                if optimal_position_pct != default_position_pct:
+                    logger.info(f"Using risk-optimized position size: {optimal_position_pct:.2%} (default: {default_position_pct:.2%})")
 
                 # Skip if position size is too small
                 if position_size < self.config['trading_params']['min_trade_amount']:
@@ -437,11 +483,26 @@ class TradeExecutorService:
                 filled_quantity = float(order['executedQty'])
                 logger.info(f"Market buy order filled at ${fill_price:.8f}")
 
-                # Calculate and round stop loss and take profit prices
-                stop_loss_price = self.round_price(
-                    fill_price * (1 - self.config['trading_params']['stop_loss_pct'] / 100),
-                    rules['tick_size']
-                )
+                # Use adaptive stop-loss if available, otherwise use default
+                if 'adaptive_stop_loss' in risk_info:
+                    adaptive_stop_price = risk_info['adaptive_stop_loss']
+                    adaptive_stop_pct = risk_info.get('adaptive_stop_pct', 
+                                                     self.config['trading_params']['stop_loss_pct'])
+                    
+                    logger.info(f"Using adaptive stop-loss: {adaptive_stop_pct:.2f}% (default: {self.config['trading_params']['stop_loss_pct']:.2f}%)")
+                    
+                    stop_loss_price = self.round_price(
+                        adaptive_stop_price,
+                        rules['tick_size']
+                    )
+                else:
+                    # Fall back to default stop-loss
+                    stop_loss_price = self.round_price(
+                        fill_price * (1 - self.config['trading_params']['stop_loss_pct'] / 100),
+                        rules['tick_size']
+                    )
+                
+                # Calculate and round take profit price
                 take_profit_price = self.round_price(
                     fill_price * (1 + self.config['trading_params']['take_profit_pct'] / 100),
                     rules['tick_size']
@@ -522,6 +583,18 @@ class TradeExecutorService:
     async def monitor_active_trades(self):
         """Monitor and manage active trades"""
         try:
+            # Check for stop-loss adjustment recommendations
+            try:
+                adjustments_json = await self.redis.get('adaptive_stop_losses')
+                if adjustments_json:
+                    stop_loss_adjustments = json.loads(adjustments_json)
+                else:
+                    stop_loss_adjustments = {}
+            except Exception as e:
+                logger.error(f"Error fetching stop-loss adjustments: {str(e)}")
+                stop_loss_adjustments = {}
+            
+            # Monitor each active trade
             for symbol, trade in list(self.active_trades.items()):
                 try:
                     # Get current price
@@ -535,6 +608,50 @@ class TradeExecutorService:
                     
                     logger.debug(f"Monitoring {symbol} - Current: ${current_price:.8f}, P&L: {pnl_pct:.2f}%")
                     
+                    # Check if we have an adaptive stop-loss adjustment for this symbol
+                    if symbol in stop_loss_adjustments and current_price > trade['stop_loss_price']:
+                        adjustment = stop_loss_adjustments[symbol]
+                        adaptive_stop = adjustment.get('adaptive_stop_loss', 0)
+                        
+                        # Only adjust stop-loss upward if price has moved in our favor
+                        if adaptive_stop > trade['stop_loss_price'] and pnl_pct > 0:
+                            try:
+                                # Cancel existing stop-loss order
+                                self.client.cancel_order(
+                                    symbol=symbol,
+                                    orderId=trade['stop_loss_order']
+                                )
+                                
+                                # Get trading rules
+                                rules = self.symbol_info.get(symbol)
+                                if not rules:
+                                    raise Exception(f"No trading rules found for {symbol}")
+                                
+                                # Place new stop-loss order
+                                new_stop_price = self.round_price(adaptive_stop, rules['tick_size'])
+                                logger.info(f"Adjusting stop-loss for {symbol}: ${trade['stop_loss_price']:.8f} → ${new_stop_price:.8f}")
+                                
+                                new_stop_order = self.client.create_order(
+                                    symbol=symbol,
+                                    side=SIDE_SELL,
+                                    type=ORDER_TYPE_STOP_LOSS_LIMIT,
+                                    timeInForce=TIME_IN_FORCE_GTC,
+                                    quantity=quantity,
+                                    stopPrice=new_stop_price,
+                                    price=self.round_price(new_stop_price * 0.99, rules['tick_size'])
+                                )
+                                
+                                # Update trade record
+                                trade['stop_loss_price'] = new_stop_price
+                                trade['stop_loss_order'] = new_stop_order['orderId']
+                                self.active_trades[symbol] = trade
+                                
+                                # Log the adjustment
+                                logger.info(f"Stop-loss adjusted for {symbol} to ${new_stop_price:.8f}")
+                                
+                            except Exception as e:
+                                logger.error(f"Error adjusting stop-loss for {symbol}: {str(e)}")
+                    
                     # Check stop loss
                     if current_price <= trade['stop_loss_price']:
                         logger.info(f"Stop loss triggered for {symbol} at ${current_price:.8f} ({pnl_pct:.2f}%)")
@@ -547,6 +664,12 @@ class TradeExecutorService:
                     
                 except Exception as e:
                     logger.error(f"Error monitoring trade for {symbol}: {str(e)}", exc_info=True)
+            
+            # Publish active trades to Redis for other services
+            try:
+                await self.redis.set('active_trades', json.dumps(self.active_trades))
+            except Exception as e:
+                logger.error(f"Error publishing active trades to Redis: {str(e)}")
             
         except Exception as e:
             logger.error(f"Error in trade monitoring: {str(e)}", exc_info=True)

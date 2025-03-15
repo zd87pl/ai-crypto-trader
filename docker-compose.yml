@@ -232,6 +232,37 @@ services:
       timeout: 10s
       retries: 3
     restart: unless-stopped
+    
+  portfolio-risk:
+    build: .
+    container_name: crypto-portfolio-risk
+    command: python3 services/portfolio_risk_service.py
+    environment:
+      - BINANCE_API_KEY=${BINANCE_API_KEY}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - SERVICE_PORT=${PORTFOLIO_RISK_PORT}
+      - ENABLE_METRICS=true
+    ports:
+      - "${PORTFOLIO_RISK_PORT}:${PORTFOLIO_RISK_PORT}"
+    volumes:
+      - ./config.json:/app/config.json
+      - ./logs:/app/logs
+      - ./data:/app/data
+    networks:
+      - crypto-net
+    depends_on:
+      redis:
+        condition: service_healthy
+      trade-executor:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "nc", "-z", "crypto-portfolio-risk", "${PORTFOLIO_RISK_PORT}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
 
   ai-explainability:
     build: .

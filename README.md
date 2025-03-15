@@ -102,6 +102,14 @@ python dashboard.py
 - Explains the reasoning behind each trade
 - Logs to: `logs/ai_explainability.log`
 
+### 9. Portfolio Risk Management Service
+- Implements portfolio-wide risk management
+- Calculates Value at Risk (VaR) across the entire portfolio
+- Provides adaptive stop-losses based on market volatility
+- Optimizes position sizing for better risk-adjusted returns
+- Monitors asset correlations for improved diversification
+- Logs to: `logs/portfolio_risk.log`
+
 ## Environment Setup
 
 1. Create a `.env` file with the following credentials:
