@@ -1,0 +1,55 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+      scheme: http
+      timeout: 10s
+
+scrape_configs:
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: "market-monitor"
+    static_configs:
+      - targets: ["market-monitor:${MARKET_MONITOR_PORT}"]
+    metrics_path: /metrics
+
+  - job_name: "social-monitor"
+    static_configs:
+      - targets: ["social-monitor:${SOCIAL_MONITOR_PORT}"]
+    metrics_path: /metrics
+
+  - job_name: "ai-analyzer"
+    static_configs:
+      - targets: ["ai-analyzer:${AI_ANALYZER_PORT}"]
+    metrics_path: /metrics
+
+  - job_name: "trade-executor"
+    static_configs:
+      - targets: ["trade-executor:${TRADE_EXECUTOR_PORT}"]
+    metrics_path: /metrics
+
+  - job_name: "strategy-evolution"
+    static_configs:
+      - targets: ["strategy-evolution:${STRATEGY_EVOLUTION_PORT}"]
+    metrics_path: /metrics
+
+  - job_name: "dashboard"
+    static_configs:
+      - targets: ["dashboard:8050"]
+    metrics_path: /metrics
+
+  - job_name: "redis"
+    static_configs:
+      - targets: ["redis:6379"]
+    metrics_path: /metrics
+
+  - job_name: "node-exporter"
+    static_configs:
+      - targets: ["node-exporter:9100"]

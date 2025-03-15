@@ -16,3 +16,10 @@ flask>=2.0.0
 dash>=2.9.0
 plotly>=5.14.0
 dash-bootstrap-components>=1.4.0
+
+# Monitoring and Observability
+prometheus-client>=0.17.0
+structlog>=23.1.0
+python-json-logger>=2.0.7
+pythonjsonlogger>=0.1.0
+elasticapm>=6.16.0
