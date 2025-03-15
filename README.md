@@ -81,6 +81,13 @@ python dashboard.py
 - Maintains a history of strategy performance
 - Logs to: `logs/strategy_evolution.log`
 
+### 6. Backtesting Framework
+- Fetches and manages historical market and social data
+- Simulates trading strategy performance on historical data
+- Integrates with the AI trading logic for realistic backtests
+- Generates performance analytics and visualizations
+- Detailed documentation in `backtesting/README.md`
+
 ## Environment Setup
 
 1. Create a `.env` file with the following credentials:
@@ -152,6 +159,32 @@ python services/strategy_evolution_service.py
 # Start the dashboard
 python dashboard.py
 ```
+
+### Using the Backtesting Framework
+
+The backtesting framework allows you to test trading strategies on historical data:
+
+1. Fetch historical data for Bitcoin (1-hour intervals, past 30 days):
+```bash
+python run_backtest.py fetch --symbols BTCUSDC --intervals 1h --days 30
+```
+
+2. Run a backtest on the fetched data:
+```bash
+python run_backtest.py backtest --symbols BTCUSDC --intervals 1h --days 30 --balance 10000
+```
+
+3. View your available historical data:
+```bash
+python run_backtest.py list
+```
+
+4. Analyze backtest results:
+```bash
+python run_backtest.py analyze --metric sharpe_ratio
+```
+
+For more detailed instructions, see `backtesting/README.md`.
 
 ## Data Structures
 

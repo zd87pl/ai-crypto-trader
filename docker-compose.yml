@@ -178,6 +178,30 @@ services:
       timeout: 10s
       retries: 3
     restart: unless-stopped
+    
+  backtesting:
+    build: .
+    container_name: crypto-backtesting
+    # No specific command as this is used for running ad-hoc backtests
+    environment:
+      - BINANCE_API_KEY=${BINANCE_API_KEY}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LUNARCRUSH_API_KEY=${LUNARCRUSH_API_KEY}
+    volumes:
+      - ./config.json:/app/config.json
+      - ./logs:/app/logs
+      - ./backtesting:/app/backtesting
+      - ./backtesting/data:/app/backtesting/data
+      - ./backtesting/results:/app/backtesting/results
+      - ./backtesting/plots:/app/backtesting/plots
+    networks:
+      - crypto-net
+    depends_on:
+      - redis
+    profiles:
+      - tools
+    # No auto-start - use docker-compose run backtesting python run_backtest.py [...]
 
   # Monitoring Stack
   prometheus:
