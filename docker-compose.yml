@@ -138,6 +138,31 @@ services:
       timeout: 10s
       retries: 3
     restart: unless-stopped
+    
+  dashboard:
+    build: .
+    container_name: crypto-dashboard
+    command: python3 dashboard.py
+    environment:
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    ports:
+      - "8050:8050"
+    volumes:
+      - ./config.json:/app/config.json
+      - ./logs:/app/logs
+    networks:
+      - crypto-net
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "nc", "-z", "crypto-dashboard", "8050"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
 
 networks:
   crypto-net:

@@ -1,4 +1,4 @@
-# Crypto Trader
+# AI Crypto Trader
 
 ## ⚠️ Important Disclaimer
 
@@ -18,6 +18,34 @@ By using this system, you acknowledge that you are doing so at your own risk and
 This project serves as a technical demonstration of integrating AI with cryptocurrency markets and should be treated as an educational resource for understanding automated trading systems.
 
 ---
+
+## Dashboard
+
+The project includes a modern, interactive dashboard that provides real-time insights into your trading system:
+
+![Dashboard Screenshot](https://placeholder-for-dashboard-screenshot.png)
+
+### Dashboard Features
+
+- **Real-time Price Charts**: Interactive candlestick charts with technical indicators (RSI, MACD, Bollinger Bands)
+- **Portfolio Overview**: Track total value, daily change, and asset allocation
+- **Trading Signals**: View recent trading signals with confidence levels and reasoning
+- **Trade History**: Monitor executed trades and performance
+- **Social Sentiment Analysis**: Track social media sentiment, volume, engagement, and contributors
+- **News Feed**: Latest crypto news affecting your trading pairs
+- **Performance Metrics**: Visual representation of portfolio growth over time
+
+### Accessing the Dashboard
+
+When running the system with Docker Compose, the dashboard is available at:
+```
+http://localhost:8050
+```
+
+For local setup, start the dashboard separately with:
+```bash
+python dashboard.py
+```
 
 ## System Components
 
@@ -47,6 +75,12 @@ This project serves as a technical demonstration of integrating AI with cryptocu
 - Updates portfolio holdings
 - Logs to: `logs/trade_executor.log`
 
+### 5. Strategy Evolution Service
+- Self-improves trading strategies based on performance data
+- Uses AI to generate and refine trading approaches
+- Maintains a history of strategy performance
+- Logs to: `logs/strategy_evolution.log`
+
 ## Environment Setup
 
 1. Create a `.env` file with the following credentials:
@@ -71,6 +105,52 @@ SOCIAL_MONITOR_PORT=8005
 # Redis configuration
 REDIS_HOST=redis
 REDIS_PORT=6379
+```
+
+## Getting Started
+
+### With Docker (Recommended)
+
+1. Make sure you have Docker and Docker Compose installed
+2. Clone the repository and navigate to the project directory
+3. Create your `.env` file with the required credentials
+4. Start all services with:
+
+```bash
+docker-compose up -d
+```
+
+This will start all services, including the dashboard which will be available at `http://localhost:8050`.
+
+### Local Development
+
+1. Install the required dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+2. Create your `.env` file with the required credentials
+3. Start each service separately:
+
+```bash
+# Start the market monitor
+python services/market_monitor_service.py
+
+# Start the social monitor
+python services/social_monitor_service.py
+
+# Start the AI analyzer
+python services/ai_analyzer_service.py
+
+# Start the trade executor
+python services/trade_executor_service.py
+
+# Start the strategy evolution service
+python services/strategy_evolution_service.py
+
+# Start the dashboard
+python dashboard.py
 ```
 
 ## Data Structures
@@ -209,3 +289,4 @@ Example monitoring log:
 2024-11-24 21:33:45,400 - INFO - [TradeExecutor] Updated holdings - Total Portfolio Value: $257.65
 2024-11-24 21:33:45,401 - INFO - [TradeExecutor] Available USDC: $1.18
 2024-11-24 21:33:45,402 - INFO - [SocialMonitor] Social sentiment accuracy: 82%
+```

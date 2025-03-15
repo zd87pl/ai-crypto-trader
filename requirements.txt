@@ -12,3 +12,7 @@ python-dotenv>=1.0.0
 requests>=2.31.0
 aiohttp>=3.9.0
 ujson>=5.8.0
+flask>=2.0.0
+dash>=2.9.0
+plotly>=5.14.0
+dash-bootstrap-components>=1.4.0
