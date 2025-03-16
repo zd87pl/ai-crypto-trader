@@ -102,28 +102,41 @@ python dashboard.py
 - Maintains a history of strategy performance
 - Logs to: `logs/strategy_evolution.log`
 
-### 6. Backtesting Framework
+### 6. Market Regime Service
+- Detects market regimes (bull, bear, ranging, volatile)
+- Adapts trading strategies to current market conditions
+- Tracks strategy performance across different regimes
+- Logs to: `logs/market_regime.log`
+
+### 7. Strategy Selection Service
+- Automatically selects optimal trading strategies
+- Considers multiple factors: market regime, historical performance, risk profile, social sentiment
+- Adapts to changing market conditions in real-time
+- Makes data-driven strategy switching decisions
+- Logs to: `logs/strategy_selection.log`
+
+### 8. Backtesting Framework
 - Fetches and manages historical market and social data
 - Simulates trading strategy performance on historical data
 - Integrates with the AI trading logic for realistic backtests
 - Generates performance analytics and visualizations
 - Detailed documentation in `backtesting/README.md`
 
-### 7. Model Registry Service
+### 9. Model Registry Service
 - Tracks AI model versions and performance metrics
 - Provides version control for trading models
 - Maintains a registry of all model versions
 - Enables model comparison and selection
 - Logs to: `logs/model_registry.log`
 
-### 8. AI Explainability Service
+### 10. AI Explainability Service
 - Enhances trading decisions with detailed explanations
 - Visualizes factor weights influencing decisions
 - Provides technical and social factors analysis
 - Explains the reasoning behind each trade
 - Logs to: `logs/ai_explainability.log`
 
-### 9. Portfolio Risk Management Service
+### 11. Portfolio Risk Management Service
 - Implements portfolio-wide risk management
 - Calculates Value at Risk (VaR) across the entire portfolio
 - Provides adaptive stop-losses based on market volatility
@@ -201,6 +214,12 @@ python services/trade_executor_service.py
 # Start the strategy evolution service
 python services/strategy_evolution_service.py
 
+# Start the market regime service
+python services/market_regime_service.py
+
+# Start the strategy selection service
+python services/strategy_selection_service.py
+
 # Start the model registry service
 python run_ai_model_services.py --model-registry
 
@@ -209,6 +228,9 @@ python run_ai_model_services.py --explainability
 
 # Start the dashboard
 python dashboard.py
+
+# Or use the integrated run_trader.py script to run everything together
+python run_trader.py
 ```
 
 ### Using the Backtesting Framework

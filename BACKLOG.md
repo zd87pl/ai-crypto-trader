@@ -79,7 +79,7 @@
 - [x] **STRAT-03**: Create strategy mutation framework
 - [x] **STRAT-04**: Implement cross-validation for strategies
 - [x] **STRAT-05**: Add strategy performance tracking
-- [ ] **STRAT-06**: Implement automated strategy selection
+- [x] **STRAT-06**: Implement automated strategy selection
 - [ ] **STRAT-07**: Add social sentiment to strategy evolution
 - [x] **STRAT-08**: Create strategy performance comparison framework
 - [x] **STRAT-09**: Implement market regime-specific strategy selection
