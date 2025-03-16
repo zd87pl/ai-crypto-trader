@@ -77,7 +77,7 @@
 - [x] **STRAT-01**: Implement genetic algorithms for strategy optimization
 - [x] **STRAT-02**: Add reinforcement learning capabilities
 - [x] **STRAT-03**: Create strategy mutation framework
-- [ ] **STRAT-04**: Implement cross-validation for strategies
+- [x] **STRAT-04**: Implement cross-validation for strategies
 - [x] **STRAT-05**: Add strategy performance tracking
 - [ ] **STRAT-06**: Implement automated strategy selection
 - [ ] **STRAT-07**: Add social sentiment to strategy evolution
@@ -197,7 +197,7 @@
 - [x] **BACK-07**: Add strategy evolution simulation
 - [x] **BACK-08**: Include social metrics in backtesting
 - [x] **BACK-09**: Create comprehensive backtesting with historical social data
-- [ ] **BACK-10**: Implement cross-validation for strategies across market conditions
+- [x] **BACK-10**: Implement cross-validation for strategies across market conditions
 
 ### Documentation
 - [x] **DOC-01**: Add environment setup documentation

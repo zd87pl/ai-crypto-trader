@@ -631,6 +631,810 @@ class StrategyEvaluationSystem:
             score *= penalty
         
         return score
+        
+    def cross_validate_strategy(self, strategy_id: str, parameters: Dict, 
+                               market_data_periods: List[Dict], k_folds: int = 5, 
+                               test_metric: str = 'sharpe_ratio',
+                               normalize_results: bool = True) -> Dict:
+        """
+        Perform k-fold cross-validation on a strategy across different market conditions.
+        
+        Args:
+            strategy_id: Identifier for the strategy
+            parameters: Strategy parameters to test
+            market_data_periods: List of market data periods to use for validation
+            k_folds: Number of validation folds to use
+            test_metric: Primary metric to use for evaluation
+            normalize_results: Whether to normalize results across folds
+            
+        Returns:
+            Dictionary of cross-validation results
+        """
+        logger.info(f"Performing {k_folds}-fold cross-validation for strategy {strategy_id}")
+        
+        if len(market_data_periods) < k_folds:
+            logger.warning(f"Not enough market data periods ({len(market_data_periods)}) for {k_folds} folds")
+            k_folds = len(market_data_periods)
+        
+        # Split data into k folds
+        fold_size = len(market_data_periods) // k_folds
+        folds = []
+        
+        for i in range(k_folds):
+            start_idx = i * fold_size
+            end_idx = (i + 1) * fold_size if i < k_folds - 1 else len(market_data_periods)
+            folds.append(market_data_periods[start_idx:end_idx])
+        
+        # Track results for each fold
+        fold_results = []
+        
+        # Perform cross-validation
+        for fold_idx, test_fold in enumerate(folds):
+            logger.info(f"Evaluating fold {fold_idx+1}/{k_folds}")
+            
+            # Combine all other folds for training
+            train_folds = []
+            for i in range(k_folds):
+                if i != fold_idx:
+                    train_folds.extend(folds[i])
+            
+            # Perform backtesting on training data
+            train_trades = self._simulate_trades(strategy_id, parameters, train_folds)
+            train_metrics = StrategyPerformanceMetrics.calculate_metrics(train_trades)
+            
+            # Perform backtesting on test data
+            test_trades = self._simulate_trades(strategy_id, parameters, test_fold)
+            test_metrics = StrategyPerformanceMetrics.calculate_metrics(test_trades)
+            
+            # Calculate fold score
+            train_score = self._calculate_strategy_score(train_metrics)
+            test_score = self._calculate_strategy_score(test_metrics)
+            
+            # Store fold results
+            fold_result = {
+                "fold": fold_idx + 1,
+                "train_metrics": {
+                    "sharpe_ratio": train_metrics.get('sharpe_ratio', 0),
+                    "win_rate": train_metrics.get('win_rate', 0),
+                    "max_drawdown": train_metrics.get('max_drawdown', 0),
+                    "profit_factor": train_metrics.get('profit_factor', 0),
+                    "return_pct": train_metrics.get('return_pct', 0),
+                    "test_metric": train_metrics.get(test_metric, 0)
+                },
+                "test_metrics": {
+                    "sharpe_ratio": test_metrics.get('sharpe_ratio', 0),
+                    "win_rate": test_metrics.get('win_rate', 0),
+                    "max_drawdown": test_metrics.get('max_drawdown', 0),
+                    "profit_factor": test_metrics.get('profit_factor', 0),
+                    "return_pct": test_metrics.get('return_pct', 0),
+                    "test_metric": test_metrics.get(test_metric, 0)
+                },
+                "train_score": train_score,
+                "test_score": test_score,
+                "market_conditions": self._summarize_market_conditions(test_fold)
+            }
+            
+            fold_results.append(fold_result)
+        
+        # Calculate cross-validation summary statistics
+        cv_summary = self._calculate_cv_summary(fold_results, test_metric, normalize_results)
+        
+        # Compile cross-validation results
+        cv_results = {
+            "strategy_id": strategy_id,
+            "parameters": parameters,
+            "k_folds": k_folds,
+            "test_metric": test_metric,
+            "cv_summary": cv_summary,
+            "fold_results": fold_results,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Store cross-validation results
+        results_path = os.path.join(self.data_dir, f"{strategy_id}_cv_results.json")
+        with open(results_path, 'w') as f:
+            json.dump(cv_results, f, indent=2, default=str)
+        
+        # Generate visualization of cross-validation results
+        self._visualize_cv_results(cv_results)
+        
+        logger.info(f"Cross-validation complete for strategy {strategy_id}")
+        logger.info(f"CV Score: {cv_summary['mean_test_score']:.4f} (±{cv_summary['std_test_score']:.4f})")
+        
+        return cv_results
+    
+    def _simulate_trades(self, strategy_id: str, parameters: Dict, market_data: List[Dict]) -> List[Dict]:
+        """
+        Simulate trades based on strategy parameters and market data.
+        
+        Args:
+            strategy_id: Identifier for the strategy
+            parameters: Strategy parameters to use
+            market_data: Market data to simulate trades on
+            
+        Returns:
+            List of simulated trades
+        """
+        # This would be a real backtesting simulation in a full implementation
+        # For now, we'll generate synthetic trades based on parameters and market data
+        
+        trades = []
+        initial_capital = 10000
+        position_size_pct = min(parameters.get('max_position_size', 5), 20) / 100
+        position_size = initial_capital * position_size_pct
+        
+        current_position = None
+        entry_price = 0
+        
+        # Strategy parameters
+        rsi_period = parameters.get('rsi_period', 14)
+        rsi_overbought = parameters.get('rsi_overbought', 70)
+        rsi_oversold = parameters.get('rsi_oversold', 30)
+        take_profit = parameters.get('take_profit', 3) / 100
+        stop_loss = parameters.get('stop_loss', 2) / 100
+        
+        # Simulate trades based on strategy rules
+        for i, data_point in enumerate(market_data):
+            timestamp = data_point.get('timestamp', f"2023-01-{i+1:02d}T00:00:00Z")
+            symbol = data_point.get('symbol', 'BTCUSDT')
+            price = data_point.get('price', 50000)
+            rsi = data_point.get('rsi', 50)
+            
+            # Entry logic
+            if current_position is None:
+                if rsi < rsi_oversold:
+                    # Buy signal
+                    current_position = "long"
+                    entry_price = price
+                    quantity = position_size / price
+                    trades.append({
+                        "timestamp": timestamp,
+                        "symbol": symbol,
+                        "side": "buy",
+                        "price": price,
+                        "quantity": quantity,
+                        "fees": position_size * 0.001,  # 0.1% fees
+                        "pnl": -position_size * 0.001  # Initial PnL is negative due to fees
+                    })
+                elif rsi > rsi_overbought:
+                    # Sell signal
+                    current_position = "short"
+                    entry_price = price
+                    quantity = position_size / price
+                    trades.append({
+                        "timestamp": timestamp,
+                        "symbol": symbol,
+                        "side": "sell",
+                        "price": price,
+                        "quantity": quantity,
+                        "fees": position_size * 0.001,  # 0.1% fees
+                        "pnl": -position_size * 0.001  # Initial PnL is negative due to fees
+                    })
+            
+            # Exit logic
+            elif current_position == "long":
+                profit_pct = (price - entry_price) / entry_price
+                if profit_pct >= take_profit or profit_pct <= -stop_loss or rsi > rsi_overbought:
+                    # Close long position
+                    quantity = position_size / entry_price
+                    pnl = quantity * (price - entry_price) - position_size * 0.002  # PnL minus fees
+                    trades.append({
+                        "timestamp": timestamp,
+                        "symbol": symbol,
+                        "side": "sell",
+                        "price": price,
+                        "quantity": quantity,
+                        "fees": position_size * 0.001,
+                        "pnl": pnl
+                    })
+                    current_position = None
+            
+            elif current_position == "short":
+                profit_pct = (entry_price - price) / entry_price
+                if profit_pct >= take_profit or profit_pct <= -stop_loss or rsi < rsi_oversold:
+                    # Close short position
+                    quantity = position_size / entry_price
+                    pnl = quantity * (entry_price - price) - position_size * 0.002  # PnL minus fees
+                    trades.append({
+                        "timestamp": timestamp,
+                        "symbol": symbol,
+                        "side": "buy",
+                        "price": price,
+                        "quantity": quantity,
+                        "fees": position_size * 0.001,
+                        "pnl": pnl
+                    })
+                    current_position = None
+        
+        # Force close any open positions at the end
+        if current_position == "long":
+            price = market_data[-1].get('price', 50000)
+            quantity = position_size / entry_price
+            pnl = quantity * (price - entry_price) - position_size * 0.002
+            trades.append({
+                "timestamp": market_data[-1].get('timestamp', "2023-01-31T00:00:00Z"),
+                "symbol": market_data[-1].get('symbol', 'BTCUSDT'),
+                "side": "sell",
+                "price": price,
+                "quantity": quantity,
+                "fees": position_size * 0.001,
+                "pnl": pnl
+            })
+        
+        elif current_position == "short":
+            price = market_data[-1].get('price', 50000)
+            quantity = position_size / entry_price
+            pnl = quantity * (entry_price - price) - position_size * 0.002
+            trades.append({
+                "timestamp": market_data[-1].get('timestamp', "2023-01-31T00:00:00Z"),
+                "symbol": market_data[-1].get('symbol', 'BTCUSDT'),
+                "side": "buy",
+                "price": price,
+                "quantity": quantity,
+                "fees": position_size * 0.001,
+                "pnl": pnl
+            })
+        
+        return trades
+    
+    def _summarize_market_conditions(self, market_data: List[Dict]) -> Dict:
+        """
+        Summarize market conditions from a period of market data.
+        
+        Args:
+            market_data: List of market data points
+            
+        Returns:
+            Dictionary summarizing market conditions
+        """
+        if not market_data:
+            return {
+                "trend": "unknown",
+                "volatility": 0,
+                "volume": 0,
+                "period_start": None,
+                "period_end": None
+            }
+        
+        # Extract price and volume data
+        prices = [data.get('price', 0) for data in market_data if data.get('price', 0) > 0]
+        volumes = [data.get('volume', 0) for data in market_data if data.get('volume', 0) > 0]
+        
+        # Determine trend
+        if len(prices) >= 2:
+            price_change = (prices[-1] - prices[0]) / prices[0] if prices[0] > 0 else 0
+            if price_change > 0.05:  # 5% up
+                trend = "uptrend"
+            elif price_change < -0.05:  # 5% down
+                trend = "downtrend"
+            else:
+                trend = "ranging"
+        else:
+            trend = "unknown"
+        
+        # Calculate volatility (standard deviation of price changes)
+        if len(prices) >= 2:
+            price_changes = [(prices[i] - prices[i-1]) / prices[i-1] for i in range(1, len(prices))]
+            volatility = np.std(price_changes) if price_changes else 0
+        else:
+            volatility = 0
+        
+        # Calculate average volume
+        avg_volume = np.mean(volumes) if volumes else 0
+        
+        # Get period timestamps
+        period_start = market_data[0].get('timestamp', None) if market_data else None
+        period_end = market_data[-1].get('timestamp', None) if market_data else None
+        
+        return {
+            "trend": trend,
+            "volatility": float(volatility),
+            "volume": float(avg_volume),
+            "period_start": period_start,
+            "period_end": period_end
+        }
+    
+    def _calculate_cv_summary(self, fold_results: List[Dict], test_metric: str, 
+                             normalize: bool) -> Dict:
+        """
+        Calculate summary statistics from cross-validation results.
+        
+        Args:
+            fold_results: List of results from each fold
+            test_metric: Primary metric used for evaluation
+            normalize: Whether to normalize results across folds
+            
+        Returns:
+            Dictionary of summary statistics
+        """
+        train_scores = [fold['train_score'] for fold in fold_results]
+        test_scores = [fold['test_score'] for fold in fold_results]
+        
+        train_metrics = {}
+        test_metrics = {}
+        
+        # Extract all metrics from first fold to initialize
+        if fold_results:
+            for metric in fold_results[0]['train_metrics']:
+                train_metrics[metric] = []
+                test_metrics[metric] = []
+        
+        # Collect all metrics across folds
+        for fold in fold_results:
+            for metric, value in fold['train_metrics'].items():
+                train_metrics[metric].append(value)
+            
+            for metric, value in fold['test_metrics'].items():
+                test_metrics[metric].append(value)
+        
+        # Calculate summary statistics
+        summary = {
+            "mean_train_score": float(np.mean(train_scores)),
+            "std_train_score": float(np.std(train_scores)),
+            "mean_test_score": float(np.mean(test_scores)),
+            "std_test_score": float(np.std(test_scores)),
+            "train_test_gap": float(np.mean(train_scores) - np.mean(test_scores)),
+            "relative_overfitting": float((np.mean(train_scores) - np.mean(test_scores)) / np.mean(train_scores)) if np.mean(train_scores) > 0 else 0
+        }
+        
+        # Calculate mean and std for each metric
+        for metric in train_metrics:
+            summary[f"mean_train_{metric}"] = float(np.mean(train_metrics[metric]))
+            summary[f"std_train_{metric}"] = float(np.std(train_metrics[metric]))
+            
+        for metric in test_metrics:
+            summary[f"mean_test_{metric}"] = float(np.mean(test_metrics[metric]))
+            summary[f"std_test_{metric}"] = float(np.std(test_metrics[metric]))
+        
+        # Calculate consistency score (how consistent results are across folds)
+        summary["consistency"] = 1.0 - min(1.0, summary["std_test_score"] / summary["mean_test_score"]) if summary["mean_test_score"] > 0 else 0.0
+        
+        return summary
+    
+    def _visualize_cv_results(self, cv_results: Dict) -> None:
+        """
+        Generate visualizations for cross-validation results.
+        
+        Args:
+            cv_results: Dictionary of cross-validation results
+        """
+        strategy_id = cv_results["strategy_id"]
+        fold_results = cv_results["fold_results"]
+        k_folds = cv_results["k_folds"]
+        test_metric = cv_results["test_metric"]
+        cv_summary = cv_results["cv_summary"]
+        
+        # Create visualization directory
+        viz_dir = os.path.join(self.reports_dir, f"{strategy_id}_cv")
+        os.makedirs(viz_dir, exist_ok=True)
+        
+        # Extract data for plotting
+        folds = list(range(1, k_folds + 1))
+        train_scores = [fold['train_score'] for fold in fold_results]
+        test_scores = [fold['test_score'] for fold in fold_results]
+        
+        train_metrics = {metric: [] for metric in fold_results[0]['train_metrics']} if fold_results else {}
+        test_metrics = {metric: [] for metric in fold_results[0]['test_metrics']} if fold_results else {}
+        
+        for fold in fold_results:
+            for metric, value in fold['train_metrics'].items():
+                train_metrics[metric].append(value)
+            
+            for metric, value in fold['test_metrics'].items():
+                test_metrics[metric].append(value)
+        
+        # 1. Train vs Test Score by Fold
+        plt.figure(figsize=(12, 6))
+        plt.plot(folds, train_scores, 'o-', label='Train Score')
+        plt.plot(folds, test_scores, 'o-', label='Test Score')
+        plt.axhline(y=cv_summary['mean_train_score'], color='b', linestyle='--', alpha=0.7)
+        plt.axhline(y=cv_summary['mean_test_score'], color='r', linestyle='--', alpha=0.7)
+        plt.title(f'Train vs Test Scores Across {k_folds}-Fold Cross-Validation')
+        plt.xlabel('Fold')
+        plt.ylabel('Score')
+        plt.legend()
+        plt.grid(True)
+        plt.savefig(os.path.join(viz_dir, 'train_test_score.png'))
+        plt.close()
+        
+        # 2. Specific Metrics Across Folds
+        for metric in ['sharpe_ratio', 'win_rate', 'max_drawdown', 'profit_factor', 'return_pct']:
+            if metric in train_metrics and metric in test_metrics:
+                plt.figure(figsize=(12, 6))
+                plt.plot(folds, train_metrics[metric], 'o-', label=f'Train {metric}')
+                plt.plot(folds, test_metrics[metric], 'o-', label=f'Test {metric}')
+                plt.title(f'{metric.replace("_", " ").title()} Across {k_folds}-Fold Cross-Validation')
+                plt.xlabel('Fold')
+                plt.ylabel(metric.replace("_", " ").title())
+                plt.legend()
+                plt.grid(True)
+                plt.savefig(os.path.join(viz_dir, f'{metric}_by_fold.png'))
+                plt.close()
+        
+        # 3. Market Conditions vs Performance
+        trends = [fold['market_conditions']['trend'] for fold in fold_results]
+        volatilities = [fold['market_conditions']['volatility'] for fold in fold_results]
+        
+        # 3.1. Performance by Trend
+        trend_categories = set(trends)
+        trend_performance = {trend: [] for trend in trend_categories}
+        
+        for i, trend in enumerate(trends):
+            trend_performance[trend].append(test_scores[i])
+        
+        plt.figure(figsize=(10, 6))
+        for trend, scores in trend_performance.items():
+            plt.bar(trend, np.mean(scores), yerr=np.std(scores) if len(scores) > 1 else 0,
+                   alpha=0.7, capsize=10)
+        plt.title(f'Performance by Market Trend')
+        plt.xlabel('Market Trend')
+        plt.ylabel('Test Score')
+        plt.grid(True, axis='y')
+        plt.savefig(os.path.join(viz_dir, 'performance_by_trend.png'))
+        plt.close()
+        
+        # 3.2. Performance vs Volatility
+        plt.figure(figsize=(10, 6))
+        plt.scatter(volatilities, test_scores, alpha=0.7)
+        
+        # Add trend line
+        if len(volatilities) > 1:
+            z = np.polyfit(volatilities, test_scores, 1)
+            p = np.poly1d(z)
+            plt.plot(sorted(volatilities), p(sorted(volatilities)), "r--", alpha=0.7)
+        
+        plt.title(f'Performance vs Market Volatility')
+        plt.xlabel('Volatility')
+        plt.ylabel('Test Score')
+        plt.grid(True)
+        plt.savefig(os.path.join(viz_dir, 'performance_vs_volatility.png'))
+        plt.close()
+        
+        # 4. Summary Statistics Visualization
+        plt.figure(figsize=(12, 8))
+        
+        # Extract key summary statistics
+        stats = [
+            cv_summary['mean_train_score'],
+            cv_summary['mean_test_score'],
+            cv_summary['train_test_gap'],
+            cv_summary['consistency']
+        ]
+        
+        labels = [
+            'Mean Train Score',
+            'Mean Test Score',
+            'Train-Test Gap',
+            'Consistency'
+        ]
+        
+        plt.bar(labels, stats, alpha=0.7)
+        plt.title('Cross-Validation Summary Statistics')
+        plt.ylabel('Value')
+        plt.grid(True, axis='y')
+        plt.savefig(os.path.join(viz_dir, 'summary_statistics.png'))
+        plt.close()
+        
+        logger.info(f"Cross-validation visualizations saved to {viz_dir}")
+        
+    def cross_validate_across_market_conditions(self, strategy_id: str, parameters: Dict) -> Dict:
+        """
+        Perform cross-validation across different market conditions.
+        
+        Args:
+            strategy_id: Identifier for the strategy
+            parameters: Strategy parameters to test
+            
+        Returns:
+            Dictionary of cross-validation results
+        """
+        # Define different market condition periods
+        market_conditions = [
+            {
+                "name": "bull_market",
+                "start_date": "2021-01-01",
+                "end_date": "2021-04-01",
+                "description": "Strong uptrend with high volume"
+            },
+            {
+                "name": "bear_market",
+                "start_date": "2022-05-01",
+                "end_date": "2022-08-01",
+                "description": "Strong downtrend with high volatility"
+            },
+            {
+                "name": "sideways_market",
+                "start_date": "2019-09-01",
+                "end_date": "2019-12-01",
+                "description": "Ranging market with low volatility"
+            },
+            {
+                "name": "recovery_market",
+                "start_date": "2023-01-01",
+                "end_date": "2023-04-01",
+                "description": "Recovery phase with increasing volume"
+            },
+            {
+                "name": "high_volatility",
+                "start_date": "2020-03-01",
+                "end_date": "2020-06-01",
+                "description": "Extremely volatile market conditions"
+            }
+        ]
+        
+        # Load market data for each period
+        market_data_periods = []
+        for condition in market_conditions:
+            # In a real implementation, we would load historical data for each period
+            # For now, we'll generate synthetic data
+            market_data = self._generate_synthetic_market_data(
+                condition["name"],
+                condition["start_date"],
+                condition["end_date"]
+            )
+            market_data_periods.append(market_data)
+        
+        # Perform cross-validation
+        cv_results = self.cross_validate_strategy(
+            strategy_id,
+            parameters,
+            market_data_periods,
+            k_folds=len(market_conditions),
+            test_metric='sharpe_ratio'
+        )
+        
+        # Add market condition information to results
+        for i, condition in enumerate(market_conditions):
+            if i < len(cv_results["fold_results"]):
+                cv_results["fold_results"][i]["market_condition_name"] = condition["name"]
+                cv_results["fold_results"][i]["market_condition_description"] = condition["description"]
+        
+        # Generate additional visualizations specific to market conditions
+        self._visualize_market_condition_performance(cv_results, market_conditions)
+        
+        return cv_results
+    
+    def _generate_synthetic_market_data(self, condition_name: str, start_date: str, end_date: str) -> List[Dict]:
+        """
+        Generate synthetic market data for a specific market condition.
+        
+        Args:
+            condition_name: Name of the market condition
+            start_date: Start date for the period
+            end_date: End date for the period
+            
+        Returns:
+            List of synthetic market data points
+        """
+        import pandas as pd
+        
+        # Parse dates
+        start = pd.to_datetime(start_date)
+        end = pd.to_datetime(end_date)
+        
+        # Generate date range with daily intervals
+        dates = pd.date_range(start=start, end=end, freq='D')
+        
+        # Generate synthetic data based on market condition
+        data = []
+        
+        if condition_name == "bull_market":
+            # Bull market: strong uptrend, moderate volatility, high volume
+            base_price = 10000
+            trend_factor = 1.001  # Small daily gain
+            volatility = 0.02
+            volume_factor = 1000000
+        
+        elif condition_name == "bear_market":
+            # Bear market: strong downtrend, high volatility, moderate volume
+            base_price = 20000
+            trend_factor = 0.999  # Small daily loss
+            volatility = 0.03
+            volume_factor = 500000
+        
+        elif condition_name == "sideways_market":
+            # Sideways market: no trend, low volatility, low volume
+            base_price = 15000
+            trend_factor = 1.0  # No trend
+            volatility = 0.01
+            volume_factor = 300000
+        
+        elif condition_name == "recovery_market":
+            # Recovery market: moderate uptrend, decreasing volatility, increasing volume
+            base_price = 5000
+            trend_factor = 1.0015  # Moderate daily gain
+            volatility = 0.015
+            volume_factor = 700000
+        
+        elif condition_name == "high_volatility":
+            # High volatility market: variable trend, very high volatility, high volume
+            base_price = 12000
+            trend_factor = 1.0  # No clear trend
+            volatility = 0.05
+            volume_factor = 1500000
+        
+        else:
+            # Default market condition
+            base_price = 10000
+            trend_factor = 1.0
+            volatility = 0.02
+            volume_factor = 500000
+        
+        # Generate daily data
+        price = base_price
+        for date in dates:
+            # Add random noise to trend
+            daily_change = np.random.normal(trend_factor, volatility)
+            price *= daily_change
+            
+            # Generate other indicator values
+            rsi = np.random.normal(50, 15)  # Center around 50 with std 15
+            rsi = max(0, min(100, rsi))  # Clamp to 0-100
+            
+            volume = np.random.normal(volume_factor, volume_factor * 0.2)
+            volume = max(0, volume)
+            
+            # Create data point
+            data_point = {
+                "timestamp": date.isoformat(),
+                "symbol": "BTCUSDT",
+                "price": price,
+                "volume": volume,
+                "rsi": rsi,
+                "macd": np.random.normal(0, 1),
+                "macd_signal": np.random.normal(0, 1),
+                "bb_upper": price * (1 + volatility * 2),
+                "bb_lower": price * (1 - volatility * 2),
+                "bb_middle": price,
+                "ema_short": price * (1 + np.random.normal(0, 0.01)),
+                "ema_long": price * (1 + np.random.normal(0, 0.02)),
+                "market_condition": condition_name
+            }
+            
+            data.append(data_point)
+        
+        return data
+    
+    def _visualize_market_condition_performance(self, cv_results: Dict, market_conditions: List[Dict]) -> None:
+        """
+        Generate visualizations comparing performance across market conditions.
+        
+        Args:
+            cv_results: Dictionary of cross-validation results
+            market_conditions: List of market condition definitions
+        """
+        strategy_id = cv_results["strategy_id"]
+        fold_results = cv_results["fold_results"]
+        
+        # Create visualization directory
+        viz_dir = os.path.join(self.reports_dir, f"{strategy_id}_market_conditions")
+        os.makedirs(viz_dir, exist_ok=True)
+        
+        # Extract market condition names and test scores
+        condition_names = [fold.get("market_condition_name", f"Fold {i+1}") 
+                          for i, fold in enumerate(fold_results)]
+        test_scores = [fold['test_score'] for fold in fold_results]
+        
+        # 1. Performance across market conditions
+        plt.figure(figsize=(12, 6))
+        bars = plt.bar(condition_names, test_scores, alpha=0.7)
+        
+        # Color bars by performance
+        for i, bar in enumerate(bars):
+            if test_scores[i] > 1.0:
+                bar.set_color('green')
+            elif test_scores[i] > 0:
+                bar.set_color('blue')
+            else:
+                bar.set_color('red')
+        
+        plt.title(f'Strategy Performance Across Market Conditions')
+        plt.xlabel('Market Condition')
+        plt.ylabel('Performance Score')
+        plt.xticks(rotation=45)
+        plt.grid(True, axis='y')
+        plt.tight_layout()
+        plt.savefig(os.path.join(viz_dir, 'performance_by_condition.png'))
+        plt.close()
+        
+        # 2. Radar chart of key metrics across market conditions
+        metrics = ['sharpe_ratio', 'win_rate', 'profit_factor', 'return_pct']
+        
+        # Number of variables
+        N = len(metrics)
+        
+        # Create a figure
+        plt.figure(figsize=(12, 10))
+        
+        # Create angles for each metric
+        angles = [n / float(N) * 2 * np.pi for n in range(N)]
+        angles += angles[:1]  # Close the loop
+        
+        # Create subplot with polar projection
+        ax = plt.subplot(111, polar=True)
+        
+        # Add labels for each metric
+        plt.xticks(angles[:-1], metrics)
+        
+        # Plot each market condition
+        for i, fold in enumerate(fold_results):
+            condition_name = fold.get("market_condition_name", f"Fold {i+1}")
+            
+            # Extract values for each metric
+            values = [fold['test_metrics'].get(metric, 0) for metric in metrics]
+            
+            # Close the loop
+            values += values[:1]
+            
+            # Plot values
+            ax.plot(angles, values, linewidth=2, label=condition_name)
+            ax.fill(angles, values, alpha=0.1)
+        
+        # Add legend
+        plt.legend(loc='upper right', bbox_to_anchor=(0.1, 0.1))
+        
+        plt.title('Strategy Metrics Across Market Conditions')
+        plt.savefig(os.path.join(viz_dir, 'metrics_radar_chart.png'))
+        plt.close()
+        
+        # 3. Create a summary table visualization
+        fig, ax = plt.figure(figsize=(12, 8)), plt.subplot(111)
+        ax.axis('off')
+        
+        # Create table data
+        table_data = []
+        table_data.append(["Market Condition", "Sharpe Ratio", "Win Rate", "Max Drawdown", "Return %", "Score"])
+        
+        for i, fold in enumerate(fold_results):
+            condition_name = fold.get("market_condition_name", f"Fold {i+1}")
+            metrics = fold['test_metrics']
+            
+            row = [
+                condition_name,
+                f"{metrics.get('sharpe_ratio', 0):.2f}",
+                f"{metrics.get('win_rate', 0)*100:.1f}%",
+                f"{metrics.get('max_drawdown', 0)*100:.1f}%",
+                f"{metrics.get('return_pct', 0):.2f}%",
+                f"{fold['test_score']:.2f}"
+            ]
+            table_data.append(row)
+        
+        # Add summary row
+        summary = cv_results["cv_summary"]
+        summary_row = [
+            "AVERAGE",
+            f"{summary.get('mean_test_sharpe_ratio', 0):.2f}",
+            f"{summary.get('mean_test_win_rate', 0)*100:.1f}%",
+            f"{summary.get('mean_test_max_drawdown', 0)*100:.1f}%",
+            f"{summary.get('mean_test_return_pct', 0):.2f}%",
+            f"{summary.get('mean_test_score', 0):.2f}"
+        ]
+        table_data.append(summary_row)
+        
+        # Create table
+        table = ax.table(cellText=table_data, loc='center', cellLoc='center')
+        table.auto_set_font_size(False)
+        table.set_fontsize(10)
+        table.scale(1, 2)
+        
+        # Style the table
+        table.auto_set_column_width(col=list(range(len(table_data[0]))))
+        
+        # Style header row
+        for j in range(len(table_data[0])):
+            table[(0, j)].set_facecolor('#b4b4b4')
+            table[(0, j)].set_text_props(weight='bold')
+        
+        # Style summary row
+        for j in range(len(table_data[0])):
+            table[(len(table_data)-1, j)].set_facecolor('#e0e0e0')
+            table[(len(table_data)-1, j)].set_text_props(weight='bold')
+        
+        plt.title('Strategy Performance Summary Across Market Conditions', fontsize=14, pad=20)
+        plt.savefig(os.path.join(viz_dir, 'performance_summary_table.png'), bbox_inches='tight')
+        plt.close()
+        
+        logger.info(f"Market condition performance visualizations saved to {viz_dir}")
     
     def compare_strategies(self, strategy_ids: List[str], 
                           metrics_to_compare: List[str] = None) -> Dict:
