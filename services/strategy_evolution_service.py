@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from services.genetic_algorithm import GeneticAlgorithm
 from services.reinforcement_learning import TradingRLAgent
 from services.strategy_evaluation import StrategyPerformanceMetrics, StrategyEvaluationSystem
+from services.market_regime_service import MarketRegimeService
 
 # Load environment variables
 load_dotenv()
@@ -55,6 +56,13 @@ class StrategyEvolutionService:
         self.leverage_trading = os.getenv('LEVERAGE_TRADING', 'no').lower() == 'yes'
         self.monitor_frequency = int(os.getenv('STRATEGY_MONITOR_FREQUENCY', '3600'))
         
+        # Market regime integration
+        self.enable_market_regime = os.getenv('ENABLE_MARKET_REGIME', 'yes').lower() == 'yes'
+        self.market_regime_service = None
+        if self.enable_market_regime:
+            self.market_regime_service = MarketRegimeService()
+            logger.info("Market Regime Service integrated with Strategy Evolution")
+        
         # Strategy evolution parameters
         self.enable_genetic_algorithm = os.getenv('ENABLE_GENETIC_ALGORITHM', 'yes').lower() == 'yes'
         self.enable_reinforcement_learning = os.getenv('ENABLE_REINFORCEMENT_LEARNING', 'yes').lower() == 'yes'
@@ -69,6 +77,7 @@ class StrategyEvolutionService:
         logger.info(f"- Evolution Method: {self.evolution_method}")
         logger.info(f"- Genetic Algorithm: {'Enabled' if self.enable_genetic_algorithm else 'Disabled'}")
         logger.info(f"- Reinforcement Learning: {'Enabled' if self.enable_reinforcement_learning else 'Disabled'}")
+        logger.info(f"- Market Regime Integration: {'Enabled' if self.enable_market_regime else 'Disabled'}")
         
         # Load evolution configuration
         self.evolution_config = self.config['evolution']
@@ -123,6 +132,38 @@ class StrategyEvolutionService:
             }
         }
         
+        # Market regime-specific parameter adjustments
+        self.regime_param_adjustments = {
+            'bull': {
+                'rsi_overbought': 5,          # Higher overbought threshold for bull markets
+                'rsi_oversold': 5,            # Higher oversold threshold for bull markets
+                'take_profit': 1.5,           # Higher take profit multiplier for bull markets
+                'ema_long': 0.8,              # Shorter long-term EMA for bull markets (multiplier)
+                'atr_multiplier': 1.2         # Wider ATR multiplier for bull markets
+            },
+            'bear': {
+                'rsi_overbought': -5,         # Lower overbought threshold for bear markets
+                'rsi_oversold': -5,           # Lower oversold threshold for bear markets
+                'stop_loss': 0.8,             # Tighter stop loss for bear markets (multiplier)
+                'ema_short': 1.2,             # Longer short-term EMA for bear markets (multiplier)
+                'atr_multiplier': 0.8         # Tighter ATR multiplier for bear markets
+            },
+            'ranging': {
+                'bollinger_std': 1.2,         # Wider Bollinger bands for ranging markets (multiplier)
+                'macd_signal': 0.8,           # Faster MACD signal for ranging markets (multiplier)
+                'rsi_period': 0.8,            # Shorter RSI period for ranging markets (multiplier)
+                'take_profit': 0.7,           # Lower take profit for ranging markets (multiplier)
+                'stop_loss': 0.7              # Tighter stop loss for ranging markets (multiplier)
+            },
+            'volatile': {
+                'atr_period': 0.7,            # Shorter ATR period for volatile markets (multiplier)
+                'atr_multiplier': 1.5,        # Wider ATR multiplier for volatile markets
+                'bollinger_std': 1.3,         # Wider Bollinger bands for volatile markets (multiplier)
+                'stop_loss': 0.6,             # Much tighter stop loss for volatile markets (multiplier)
+                'take_profit': 1.3            # Higher take profit for volatile markets (multiplier)
+            }
+        }
+        
         # Initialize RL agent if enabled
         if self.enable_reinforcement_learning:
             self._initialize_rl_agent()
@@ -138,8 +179,13 @@ class StrategyEvolutionService:
             'old_params': None,
             'new_params': None,
             'improvement': None,
-            'market_conditions': None
+            'market_conditions': None,
+            'market_regime': None
         }
+        
+        # Current market regime tracking
+        self.current_market_regime = None
+        self.regime_strategies = {}
     
     def _initialize_rl_agent(self):
         """Initialize the Reinforcement Learning agent"""
@@ -194,6 +240,102 @@ class StrategyEvolutionService:
         except Exception as e:
             logger.error(f"Error getting market conditions: {str(e)}")
             return None
+    
+    async def get_current_market_regime(self) -> str:
+        """
+        Get the current market regime from the market regime service or Redis.
+        
+        Returns:
+            Current market regime ('bull', 'bear', 'ranging', 'volatile', or 'unknown')
+        """
+        try:
+            # First check Redis for cached value
+            regime_data = await self.redis.get('current_market_regime')
+            
+            if regime_data:
+                return regime_data
+            
+            # If market regime service is enabled, use it to detect the current regime
+            if self.enable_market_regime and self.market_regime_service:
+                # Only perform detection if we need to, not running the full service
+                regime = await self.market_regime_service.detect_current_regime()
+                
+                # Cache the result
+                if regime != "unknown":
+                    await self.redis.set('current_market_regime', regime)
+                    self.current_market_regime = regime
+                
+                return regime
+                
+            # Fallback to a simple detection method if service is not available
+            market_conditions = await self.get_market_conditions()
+            
+            if not market_conditions:
+                return "unknown"
+            
+            # Simple regime detection logic
+            trend = market_conditions.get('trend', 'unknown')
+            volatility = market_conditions.get('volatility', 0.5)
+            
+            if volatility > 1.5:  # High volatility threshold
+                return "volatile"
+            elif trend == "uptrend":
+                return "bull"
+            elif trend == "downtrend":
+                return "bear"
+            else:
+                return "ranging"
+                
+        except Exception as e:
+            logger.error(f"Error getting current market regime: {str(e)}")
+            return "unknown"
+    
+    async def adjust_parameters_for_regime(self, params: Dict, regime: str) -> Dict:
+        """
+        Adjust strategy parameters based on the current market regime.
+        
+        Args:
+            params: Current strategy parameters
+            regime: Market regime to adjust for
+            
+        Returns:
+            Adjusted parameters for the regime
+        """
+        try:
+            if regime not in self.regime_param_adjustments or regime == "unknown":
+                # No adjustments needed
+                return params
+                
+            # Copy current parameters
+            adjusted_params = params.copy()
+            
+            # Get adjustments for this regime
+            adjustments = self.regime_param_adjustments[regime]
+            
+            # Apply adjustments
+            for param, adjustment in adjustments.items():
+                if param in adjusted_params:
+                    # Check if this is an additive or multiplicative adjustment
+                    if isinstance(adjustment, float) and 0 < adjustment < 10:
+                        # Treat as a multiplier
+                        adjusted_params[param] = int(adjusted_params[param] * adjustment) \
+                            if isinstance(adjusted_params[param], int) \
+                            else adjusted_params[param] * adjustment
+                    else:
+                        # Treat as an additive adjustment
+                        adjusted_params[param] += adjustment
+                    
+                    # Ensure parameter is within valid range
+                    if param in self.param_ranges:
+                        min_val, max_val = self.param_ranges[param]
+                        adjusted_params[param] = max(min_val, min(max_val, adjusted_params[param]))
+            
+            logger.info(f"Adjusted parameters for {regime} regime")
+            return adjusted_params
+            
+        except Exception as e:
+            logger.error(f"Error adjusting parameters for regime: {str(e)}")
+            return params
 
     async def hot_swap_strategy(self, new_params: Dict):
         """Hot swap strategy parameters in running system"""
@@ -211,8 +353,11 @@ class StrategyEvolutionService:
             return False
 
     async def optimize_with_gpt(self, current_params: Dict, performance: Dict, market_conditions: Dict, wallet_info: Dict) -> Dict:
-        """Use GPT to optimize strategy parameters based on current conditions"""
+        """Use GPT to optimize strategy parameters based on current conditions and market regime"""
         try:
+            # Get current market regime
+            market_regime = await self.get_current_market_regime()
+            
             # Create detailed prompt using config template
             prompt = f"""
             Analyze the current trading strategy and suggest optimal parameter adjustments based on:
@@ -222,6 +367,7 @@ class StrategyEvolutionService:
             - Volatility: {market_conditions.get('volatility', 'unknown')}
             - Volume: {market_conditions.get('volume', 'unknown')}
             - Key Support/Resistance levels: {market_conditions.get('levels', [])}
+            - Current Market Regime: {market_regime.upper()}
 
             Wallet Information:
             - Available Capital: ${wallet_info.get('available_usdc', 0):,.2f}
@@ -250,9 +396,16 @@ class StrategyEvolutionService:
             Optimization Goals:
             {json.dumps(self.evolution_config['optimization_goals'], indent=2)}
 
+            Market Regime-Specific Guidelines:
+            - BULL market: Focus on trend-following with higher take profits and moderate stops, favor higher RSI thresholds.
+            - BEAR market: Focus on quicker entries/exits, tighter stop losses, and capital preservation, favor lower RSI thresholds.
+            - RANGING market: Focus on mean reversion strategies with Bollinger Bands and RSI, avoid long trend-following strategies.
+            - VOLATILE market: Focus on robust risk management with wider stops based on ATR, avoid fixed stop losses.
+
             Additional Requirements:
             - {'Consider leverage trading implications for risk management' if self.leverage_trading else 'No leverage trading allowed'}
             - Adjust position sizes and risk parameters accordingly
+            - Optimize parameters specifically for the {market_regime.upper()} market regime
 
             Return ONLY a JSON object with the optimized parameters, no explanation needed.
             """
@@ -279,6 +432,10 @@ class StrategyEvolutionService:
                     validated_params[param] = max(min_val, min(max_val, value))
                 else:
                     validated_params[param] = value
+            
+            # Apply regime-specific adjustments if not already handled by GPT
+            if market_regime != "unknown" and self.enable_market_regime:
+                validated_params = await self.adjust_parameters_for_regime(validated_params, market_regime)
             
             return validated_params
             
@@ -683,8 +840,123 @@ class StrategyEvolutionService:
         
         return adjusted_params
     
+    async def select_strategy_for_regime(self, regime: str) -> str:
+        """
+        Select the best strategy for the given market regime.
+        
+        Args:
+            regime: The market regime to select a strategy for
+            
+        Returns:
+            ID of the selected strategy
+        """
+        try:
+            # Use the market regime service if available
+            if self.enable_market_regime and self.market_regime_service:
+                # Check if we already have a mapping for this regime
+                if regime in self.regime_strategies and self.regime_strategies[regime] in self.active_strategies:
+                    strategy_id = self.regime_strategies[regime]
+                    logger.info(f"Using existing mapped strategy {strategy_id} for {regime} regime")
+                    return strategy_id
+                
+                # Use market regime service to select best strategy
+                selected_strategy = await self.market_regime_service.select_strategy_for_regime(regime)
+                if selected_strategy:
+                    strategy_id = selected_strategy['worker_id']
+                    
+                    # Update our mapping
+                    self.regime_strategies[regime] = strategy_id
+                    
+                    logger.info(f"Selected strategy {strategy_id} for {regime} regime using market regime service")
+                    return strategy_id
+            
+            # Fallback: Use a simple selection method if market regime service is not available
+            # Find best strategy for this regime based on available data
+            strategies_with_scores = []
+            
+            # Score available strategies for this regime
+            for strategy_id, strategy_data in self.active_strategies.items():
+                # Fetch performance data
+                perf_key = f'strategy_performance_{strategy_id}'
+                perf_data = await self.redis.get(perf_key)
+                
+                if not perf_data:
+                    continue
+                
+                performance = json.loads(perf_data)
+                
+                # Extract key metrics
+                sharpe_ratio = performance.get('sharpe_ratio', 0)
+                win_rate = performance.get('win_rate', 0)
+                max_drawdown = performance.get('max_drawdown', 100)
+                profit_factor = performance.get('profit_factor', 0)
+                
+                # Calculate base score
+                base_score = (sharpe_ratio * 0.3 + win_rate * 0.2 + (1 - max_drawdown/100) * 0.2 + profit_factor * 0.3)
+                
+                # Adjust score based on strategy parameters' suitability for the regime
+                params = strategy_data.get('parameters', {})
+                regime_score = base_score
+                
+                # Specific adjustments for each regime (simplified version of what's in market_regime_service)
+                if regime == 'bull':
+                    # In bull markets, favor trend-following strategies
+                    if params.get('ema_long', 100) < 40:  # Shorter EMAs for faster trend following
+                        regime_score *= 1.2
+                    if params.get('take_profit', 0) > 5:  # Higher take profits for bull trends
+                        regime_score *= 1.1
+                
+                elif regime == 'bear':
+                    # In bear markets, favor strategies with tighter stop losses
+                    if params.get('stop_loss', 100) < 3:  # Tighter stop loss
+                        regime_score *= 1.2
+                    if params.get('rsi_oversold', 0) > 25:  # Higher oversold threshold
+                        regime_score *= 1.1
+                
+                elif regime == 'ranging':
+                    # In ranging markets, favor mean reversion strategies
+                    if params.get('bollinger_std', 0) > 2.0:  # Wider Bollinger Bands
+                        regime_score *= 1.2
+                    if params.get('rsi_period', 0) < 14:  # More responsive RSI
+                        regime_score *= 1.1
+                
+                elif regime == 'volatile':
+                    # In volatile markets, favor strategies with dynamic position sizing
+                    if params.get('atr_multiplier', 0) > 2.0:  # Higher ATR multiplier for dynamic stops
+                        regime_score *= 1.2
+                    if params.get('stop_loss', 0) < 2.5:  # Tighter stop losses
+                        regime_score *= 1.1
+                
+                strategies_with_scores.append({
+                    'strategy_id': strategy_id,
+                    'score': regime_score
+                })
+            
+            # Get the highest-scoring strategy
+            if strategies_with_scores:
+                best_strategy = max(strategies_with_scores, key=lambda x: x['score'])
+                strategy_id = best_strategy['strategy_id']
+                
+                # Update regime-strategy mapping
+                self.regime_strategies[regime] = strategy_id
+                
+                logger.info(f"Selected strategy {strategy_id} for {regime} regime with score {best_strategy['score']:.4f}")
+                return strategy_id
+            
+            # If no suitable strategy found, return the first available one
+            if self.active_strategies:
+                first_strategy_id = next(iter(self.active_strategies))
+                logger.warning(f"No suitable strategy found for {regime} regime, using default {first_strategy_id}")
+                return first_strategy_id
+            
+            return None
+        
+        except Exception as e:
+            logger.error(f"Error selecting strategy for regime: {str(e)}")
+            return None
+    
     async def evolve_strategy(self, strategy_id: str, performance_data: Dict) -> Dict:
-        """Evolve strategy using the selected evolution method"""
+        """Evolve strategy using the selected evolution method, with market regime awareness"""
         try:
             # Get current market conditions and wallet info
             market_conditions = await self.get_market_conditions()
@@ -694,23 +966,77 @@ class StrategyEvolutionService:
                 logger.error("Missing market or wallet data for strategy evolution")
                 return None
             
-            # Get current parameters
+            # Check current market regime
+            current_regime = await self.get_current_market_regime()
+            
+            # Check if we should select a different strategy for this regime
+            if self.enable_market_regime and current_regime != "unknown":
+                # Get the best strategy for current regime
+                optimal_strategy_id = await self.select_strategy_for_regime(current_regime)
+                
+                # If we are not already using the optimal strategy for this regime
+                if optimal_strategy_id and optimal_strategy_id != strategy_id:
+                    logger.info(f"Market regime is {current_regime}, switching to optimal strategy {optimal_strategy_id}")
+                    
+                    # Get the parameters of the optimal strategy
+                    if optimal_strategy_id in self.active_strategies:
+                        new_params = self.active_strategies[optimal_strategy_id]['parameters']
+                        
+                        # Hot swap to the optimal strategy's parameters
+                        success = await self.hot_swap_strategy(new_params)
+                        if success:
+                            # Record the strategy switch
+                            switch_data = {
+                                'timestamp': datetime.now().isoformat(),
+                                'market_regime': current_regime,
+                                'old_strategy_id': strategy_id,
+                                'new_strategy_id': optimal_strategy_id,
+                                'reason': f"Switched to optimal strategy for {current_regime} regime"
+                            }
+                            
+                            # Store strategy switch in Redis
+                            await self.redis.lpush(
+                                'strategy_switches',
+                                json.dumps(switch_data)
+                            )
+                            
+                            logger.info(f"Successfully switched to strategy {optimal_strategy_id} for {current_regime} regime")
+                            return new_params
+            
+            # Get current parameters of the specified strategy
             current_params = self.active_strategies[strategy_id]['parameters']
             
             # Get historical data for advanced methods
             historical_trades = await self._get_historical_trades(strategy_id)
             historical_market_data = await self._get_historical_market_data()
             
-            # Choose evolution method based on configuration
+            # Choose evolution method based on configuration and market regime
             new_params = None
             evolution_method = self.evolution_method
             
             if evolution_method == 'hybrid':
-                # Choose method dynamically based on data availability and market conditions
+                # Choose method dynamically based on data availability, market conditions, and regime
                 market_volatility = market_conditions.get('volatility', 0.5)
                 history_length = len(historical_trades)
                 
-                if market_volatility > 0.7 and self.enable_reinforcement_learning:
+                # Adjust method selection based on market regime
+                if current_regime == "volatile" and self.enable_reinforcement_learning:
+                    # Use RL in volatile markets
+                    logger.info("Hybrid mode selected RL due to volatile market regime")
+                    evolution_method = 'rl'
+                elif current_regime == "bull" and history_length > 30 and self.enable_genetic_algorithm:
+                    # Use GA in bull markets with enough data
+                    logger.info("Hybrid mode selected GA for bull market regime")
+                    evolution_method = 'genetic'
+                elif current_regime == "bear" and self.enable_reinforcement_learning:
+                    # Use RL in bear markets for faster adaptation
+                    logger.info("Hybrid mode selected RL for bear market regime")
+                    evolution_method = 'rl'
+                elif current_regime == "ranging":
+                    # Use GPT for ranging markets to optimize mean reversion
+                    logger.info("Hybrid mode selected GPT for ranging market regime")
+                    evolution_method = 'gpt'
+                elif market_volatility > 0.7 and self.enable_reinforcement_learning:
                     # Use RL in high volatility
                     logger.info("Hybrid mode selected RL due to high volatility")
                     evolution_method = 'rl'
@@ -747,6 +1073,10 @@ class StrategyEvolutionService:
                 logger.warning("Could not optimize parameters, keeping current strategy")
                 return None
             
+            # Apply regime-specific adjustments if not already handled
+            if current_regime != "unknown" and self.enable_market_regime:
+                new_params = await self.adjust_parameters_for_regime(new_params, current_regime)
+            
             # Hot swap to new parameters
             success = await self.hot_swap_strategy(new_params)
             if success:
@@ -758,6 +1088,7 @@ class StrategyEvolutionService:
                 evolution_data = {
                     'timestamp': datetime.now().isoformat(),
                     'market_conditions': market_conditions,
+                    'market_regime': current_regime,
                     'wallet_info': wallet_info,
                     'old_params': current_params,
                     'new_params': new_params,
@@ -774,7 +1105,8 @@ class StrategyEvolutionService:
                     'old_params': current_params,
                     'new_params': new_params,
                     'improvement': None,  # Would be calculated in a real implementation
-                    'market_conditions': market_conditions
+                    'market_conditions': market_conditions,
+                    'market_regime': current_regime
                 }
                 
                 # Store in Redis
@@ -789,7 +1121,13 @@ class StrategyEvolutionService:
                 # Register a new model version if it's different enough
                 await self._register_model_version(strategy_id, new_params, evolution_method)
                 
-                logger.info(f"Strategy evolved successfully using {evolution_method}: {json.dumps(new_params, indent=2)}")
+                # If this is a good strategy for this regime, update the regime mapping
+                if current_regime != "unknown" and (current_regime not in self.regime_strategies or 
+                                                 performance_data.get('sharpe_ratio', 0) > 1.0):
+                    self.regime_strategies[current_regime] = strategy_id
+                    logger.info(f"Updated regime mapping: {current_regime} -> {strategy_id}")
+                
+                logger.info(f"Strategy evolved successfully using {evolution_method} for {current_regime} regime: {json.dumps(new_params, indent=2)}")
                 return new_params
             
             return None
@@ -1110,14 +1448,86 @@ class StrategyEvolutionService:
         )
 
     async def run(self):
-        """Main service loop"""
+        """Main service loop with market regime integration"""
         try:
             logger.info(f"Starting Strategy Evolution Service:")
             logger.info(f"- Risk Level: {self.risk_level}")
             logger.info(f"- Leverage Trading: {'Enabled' if self.leverage_trading else 'Disabled'}")
             logger.info(f"- Monitor Frequency: {self.monitor_frequency} seconds")
+            logger.info(f"- Market Regime Integration: {'Enabled' if self.enable_market_regime else 'Disabled'}")
+            
+            # Start the market regime service if enabled
+            market_regime_task = None
+            if self.enable_market_regime and self.market_regime_service:
+                # Run the market regime service in the background
+                market_regime_task = asyncio.create_task(
+                    self.market_regime_service.run()
+                )
+                logger.info("Started Market Regime Service")
+            
+            # Initial market regime detection
+            if self.enable_market_regime:
+                current_regime = await self.get_current_market_regime()
+                logger.info(f"Initial market regime: {current_regime}")
+                self.current_market_regime = current_regime
             
             while self.running:
+                # Update market regime
+                if self.enable_market_regime:
+                    current_regime = await self.get_current_market_regime()
+                    
+                    # Log market regime changes
+                    if current_regime != self.current_market_regime and current_regime != "unknown":
+                        logger.info(f"Market regime changed from {self.current_market_regime} to {current_regime}")
+                        self.current_market_regime = current_regime
+                        
+                        # Check if we need to switch to a regime-specific strategy
+                        regime_strategy_id = await self.select_strategy_for_regime(current_regime)
+                        
+                        if regime_strategy_id and regime_strategy_id in self.active_strategies:
+                            # Get the active strategy ID
+                            active_strategy_id = await self.redis.get('active_strategy_id')
+                            
+                            # If active strategy is different from the recommended strategy for this regime
+                            if active_strategy_id != regime_strategy_id:
+                                logger.info(f"Switching to strategy {regime_strategy_id} for {current_regime} regime")
+                                
+                                # Get the parameters of the recommended strategy
+                                new_params = self.active_strategies[regime_strategy_id]['parameters']
+                                
+                                # Apply regime-specific adjustments
+                                new_params = await self.adjust_parameters_for_regime(new_params, current_regime)
+                                
+                                # Hot swap to new strategy
+                                success = await self.hot_swap_strategy(new_params)
+                                
+                                if success:
+                                    # Record the strategy switch
+                                    switch_data = {
+                                        'timestamp': datetime.now().isoformat(),
+                                        'market_regime': current_regime,
+                                        'old_strategy_id': active_strategy_id,
+                                        'new_strategy_id': regime_strategy_id,
+                                        'reason': f"Market regime changed to {current_regime}"
+                                    }
+                                    
+                                    # Publish switch notification
+                                    await self.redis.publish(
+                                        'strategy_switch',
+                                        json.dumps(switch_data)
+                                    )
+                                    
+                                    # Store switch history
+                                    await self.redis.lpush(
+                                        'strategy_switches',
+                                        json.dumps(switch_data)
+                                    )
+                                    
+                                    # Update active strategy ID
+                                    await self.redis.set('active_strategy_id', regime_strategy_id)
+                                    
+                                    logger.info(f"Successfully switched to regime-specific strategy {regime_strategy_id}")
+                
                 # Monitor active strategies
                 for strategy_id in list(self.active_strategies.keys()):
                     try:
@@ -1128,22 +1538,28 @@ class StrategyEvolutionService:
                         if self._needs_improvement(performance):
                             logger.info(f"Strategy {strategy_id} needs improvement based on {self.risk_level} risk parameters")
                             
-                            # Evolve strategy using GPT
+                            # Evolve strategy (now with market regime awareness)
                             new_params = await self.evolve_strategy(strategy_id, performance)
                             
                             if new_params:
                                 logger.info("Strategy evolved successfully")
                                 # Notify about evolution
+                                evolution_update = {
+                                    'strategy_id': strategy_id,
+                                    'timestamp': datetime.now().isoformat(),
+                                    'new_params': new_params,
+                                    'performance': performance,
+                                    'risk_level': self.risk_level,
+                                    'leverage_trading': self.leverage_trading
+                                }
+                                
+                                # Add market regime if available
+                                if self.current_market_regime:
+                                    evolution_update['market_regime'] = self.current_market_regime
+                                
                                 await self.redis.publish(
                                     'strategy_evolution_updates',
-                                    json.dumps({
-                                        'strategy_id': strategy_id,
-                                        'timestamp': datetime.now().isoformat(),
-                                        'new_params': new_params,
-                                        'performance': performance,
-                                        'risk_level': self.risk_level,
-                                        'leverage_trading': self.leverage_trading
-                                    })
+                                    json.dumps(evolution_update)
                                 )
                     except Exception as e:
                         logger.error(f"Error processing strategy {strategy_id}: {str(e)}")
@@ -1154,6 +1570,15 @@ class StrategyEvolutionService:
         except Exception as e:
             logger.error(f"Error in Strategy Evolution Service: {str(e)}")
         finally:
+            # Stop the market regime service if it was started
+            if market_regime_task and not market_regime_task.done():
+                market_regime_task.cancel()
+                try:
+                    await market_regime_task
+                except asyncio.CancelledError:
+                    pass
+                
+            # Stop our own service
             self.stop()
 
     def stop(self):
