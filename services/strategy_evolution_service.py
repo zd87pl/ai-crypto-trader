@@ -16,6 +16,7 @@ from services.genetic_algorithm import GeneticAlgorithm
 from services.reinforcement_learning import TradingRLAgent
 from services.strategy_evaluation import StrategyPerformanceMetrics, StrategyEvaluationSystem
 from services.market_regime_service import MarketRegimeService
+from services.social_strategy_integrator import SocialStrategyIntegrator
 
 # Load environment variables
 load_dotenv()
@@ -62,6 +63,13 @@ class StrategyEvolutionService:
         if self.enable_market_regime:
             self.market_regime_service = MarketRegimeService()
             logger.info("Market Regime Service integrated with Strategy Evolution")
+            
+        # Social strategy integration
+        self.enable_social_strategy = os.getenv('ENABLE_SOCIAL_STRATEGY', 'yes').lower() == 'yes'
+        self.social_strategy_integrator = None
+        if self.enable_social_strategy:
+            self.social_strategy_integrator = SocialStrategyIntegrator()
+            logger.info("Social Strategy Integrator integrated with Strategy Evolution")
         
         # Strategy evolution parameters
         self.enable_genetic_algorithm = os.getenv('ENABLE_GENETIC_ALGORITHM', 'yes').lower() == 'yes'
@@ -78,6 +86,7 @@ class StrategyEvolutionService:
         logger.info(f"- Genetic Algorithm: {'Enabled' if self.enable_genetic_algorithm else 'Disabled'}")
         logger.info(f"- Reinforcement Learning: {'Enabled' if self.enable_reinforcement_learning else 'Disabled'}")
         logger.info(f"- Market Regime Integration: {'Enabled' if self.enable_market_regime else 'Disabled'}")
+        logger.info(f"- Social Strategy Integration: {'Enabled' if self.enable_social_strategy else 'Disabled'}")
         
         # Load evolution configuration
         self.evolution_config = self.config['evolution']
@@ -353,10 +362,39 @@ class StrategyEvolutionService:
             return False
 
     async def optimize_with_gpt(self, current_params: Dict, performance: Dict, market_conditions: Dict, wallet_info: Dict) -> Dict:
-        """Use GPT to optimize strategy parameters based on current conditions and market regime"""
+        """Use GPT to optimize strategy parameters based on current conditions, market regime, and social sentiment"""
         try:
             # Get current market regime
             market_regime = await self.get_current_market_regime()
+            
+            # Get current symbol from market conditions
+            symbol = market_conditions.get('symbol', 'unknown')
+            
+            # Get social metrics if available
+            social_data = {}
+            social_strategy_info = {}
+            if self.enable_social_strategy and self.social_strategy_integrator:
+                try:
+                    # Get current social metrics
+                    social_data = await self.social_strategy_integrator.get_social_metrics(symbol)
+                    
+                    # Get social strategy if available
+                    social_strategy_json = await self.redis.get(f'social_strategy:{symbol}')
+                    if social_strategy_json:
+                        social_strategy_info = json.loads(social_strategy_json)
+                except Exception as se:
+                    logger.error(f"Error getting social data: {str(se)}")
+            
+            # Extract social metrics
+            social_metrics = social_data.get('metrics', {})
+            social_sentiment = social_metrics.get('social_sentiment', 0)
+            social_volume = social_metrics.get('social_volume', 0)
+            social_engagement = social_metrics.get('social_engagement', 0)
+            
+            # Get social impact analysis if available
+            social_impact = social_strategy_info.get('impact_analysis', {})
+            social_correlation = social_impact.get('correlation', 0)
+            social_lead_lag = social_impact.get('lead_lag', "No information available")
             
             # Create detailed prompt using config template
             prompt = f"""
@@ -373,6 +411,13 @@ class StrategyEvolutionService:
             - Available Capital: ${wallet_info.get('available_usdc', 0):,.2f}
             - Active Positions: {wallet_info.get('active_positions', 0)}
             - Current P&L: {wallet_info.get('current_pnl', '0')}%
+
+            Social Metrics:
+            - Social Sentiment: {social_sentiment:.2f} (-1 to 1 scale, higher is more positive)
+            - Social Volume: {social_volume} mentions
+            - Social Engagement: {social_engagement} interactions
+            - Social-Price Correlation: {social_correlation:.2f} (-1 to 1 scale)
+            - Lead/Lag Relationship: {social_lead_lag}
 
             Trading Configuration:
             - Risk Level: {self.risk_level}
@@ -402,10 +447,18 @@ class StrategyEvolutionService:
             - RANGING market: Focus on mean reversion strategies with Bollinger Bands and RSI, avoid long trend-following strategies.
             - VOLATILE market: Focus on robust risk management with wider stops based on ATR, avoid fixed stop losses.
 
+            Social Sentiment Guidelines:
+            - HIGH POSITIVE sentiment: Consider more aggressive entries, larger position sizes, higher take profit targets.
+            - STRONG NEGATIVE sentiment: Be more cautious with entries, reduce position size, tighten stop losses.
+            - If social metrics have strong correlation with price (>0.4), give them significant weight in your recommendations.
+            - If social metrics lead price changes, consider them more important for entries than exits.
+            - If price leads social metrics, they are less useful for entries but may help with exit timing.
+
             Additional Requirements:
             - {'Consider leverage trading implications for risk management' if self.leverage_trading else 'No leverage trading allowed'}
             - Adjust position sizes and risk parameters accordingly
             - Optimize parameters specifically for the {market_regime.upper()} market regime
+            - Integrate social sentiment data with {'high' if abs(social_correlation) > 0.4 else 'moderate' if abs(social_correlation) > 0.2 else 'low'} weighting based on correlation
 
             Return ONLY a JSON object with the optimized parameters, no explanation needed.
             """
@@ -436,6 +489,20 @@ class StrategyEvolutionService:
             # Apply regime-specific adjustments if not already handled by GPT
             if market_regime != "unknown" and self.enable_market_regime:
                 validated_params = await self.adjust_parameters_for_regime(validated_params, market_regime)
+            
+            # Apply social sentiment adjustments if enabled and not already handled by GPT
+            if symbol != 'unknown' and self.enable_social_strategy and self.social_strategy_integrator:
+                # Get best social strategy type for this symbol
+                strategy_type = social_strategy_info.get('strategy_type', 'trend_following')
+                
+                # Apply social strategy adjustments
+                social_adjusted_params = await self.social_strategy_integrator.get_social_strategy_parameters(
+                    strategy_type, symbol, validated_params
+                )
+                
+                # Use the socially adjusted parameters
+                validated_params = social_adjusted_params
+                logger.info(f"Applied social strategy adjustments for {symbol}")
             
             return validated_params
             
@@ -482,6 +549,12 @@ class StrategyEvolutionService:
                 # Adjust fitness based on parameter differences from current params
                 adjustment = 0
                 
+                # Get current market regime
+                market_regime = self.current_market_regime or "unknown"
+                
+                # Get current symbol from market conditions
+                symbol = market_conditions.get('symbol', 'unknown')
+                
                 # Penalize extreme parameter values
                 for param, value in params.items():
                     if param in self.param_ranges:
@@ -497,11 +570,72 @@ class StrategyEvolutionService:
                         # Lower RSI periods work better with higher oversold thresholds
                         rsi_balance = (30 - params['rsi_period']) * (params['rsi_oversold'] - 20) / 300
                         adjustment += rsi_balance
-                    
-                    # Adjust for social sentiment integration
-                    if param == 'social_sentiment_threshold' and performance_data.get('social_correlation', 0) > 0.3:
+                
+                # Social sentiment adjustments
+                social_correlation = performance_data.get('social_correlation', 0)
+                
+                # If we have market conditions with high social correlation
+                if symbol != 'unknown' and self.enable_social_strategy:
+                    # Check social parameters
+                    if 'social_sentiment_threshold' in params:
                         # If social metrics correlate well with performance, give bonus to strategies using them
-                        adjustment += 0.2
+                        if social_correlation > 0.4:  # Strong correlation
+                            adjustment += 0.3
+                        elif social_correlation > 0.2:  # Moderate correlation
+                            adjustment += 0.15
+                            
+                        # Adjust based on threshold appropriateness
+                        if social_correlation > 0.3 and params['social_sentiment_threshold'] < 0.6:
+                            # If strong correlation but threshold too low (not selective enough)
+                            adjustment -= 0.1
+                        elif social_correlation < 0.2 and params['social_sentiment_threshold'] > 0.7:
+                            # If weak correlation but threshold too high (too selective)
+                            adjustment -= 0.1
+                    
+                    # Add bonuses for other social parameters if they exist
+                    if 'social_volume_threshold' in params:
+                        # Volume thresholds should be appropriate for the asset
+                        # Higher volume thresholds are better for highly traded assets
+                        avg_volume = market_conditions.get('avg_volume', 0)
+                        if avg_volume > 1000000 and params['social_volume_threshold'] > 10000:
+                            adjustment += 0.1
+                        elif avg_volume < 100000 and params['social_volume_threshold'] < 3000:
+                            adjustment += 0.1
+                
+                    # Adjust for social engagement parameters
+                    if 'social_engagement_threshold' in params:
+                        # Engagement thresholds work best with an intermediate value
+                        if 2000 <= params['social_engagement_threshold'] <= 15000:
+                            adjustment += 0.1
+                
+                # Market regime-specific adjustments
+                if market_regime == 'bull':
+                    # In bull markets, favor higher take profits and moderate stops
+                    if 'take_profit' in params and params['take_profit'] > 4.0:
+                        adjustment += 0.15
+                    if 'stop_loss' in params and 1.5 <= params['stop_loss'] <= 3.0:
+                        adjustment += 0.1
+                    
+                elif market_regime == 'bear':
+                    # In bear markets, favor tighter stops and lower take profits
+                    if 'stop_loss' in params and params['stop_loss'] < 2.0:
+                        adjustment += 0.15
+                    if 'take_profit' in params and params['take_profit'] < 3.0:
+                        adjustment += 0.1
+                
+                elif market_regime == 'ranging':
+                    # In ranging markets, favor mean reversion parameters
+                    if 'bollinger_std' in params and params['bollinger_std'] > 2.0:
+                        adjustment += 0.15
+                    if 'rsi_period' in params and params['rsi_period'] < 14:
+                        adjustment += 0.1
+                
+                elif market_regime == 'volatile':
+                    # In volatile markets, favor adaptive risk management
+                    if 'atr_multiplier' in params and params['atr_multiplier'] > 1.5:
+                        adjustment += 0.15
+                    if 'stop_loss' in params and params['stop_loss'] < 1.5:
+                        adjustment += 0.1
                 
                 # Final fitness score
                 return base_fitness + adjustment
@@ -1464,6 +1598,15 @@ class StrategyEvolutionService:
                     self.market_regime_service.run()
                 )
                 logger.info("Started Market Regime Service")
+                
+            # Start the social strategy integrator if enabled
+            social_strategy_task = None
+            if self.enable_social_strategy and self.social_strategy_integrator:
+                # Run the social strategy integrator in the background
+                social_strategy_task = asyncio.create_task(
+                    self.social_strategy_integrator.run()
+                )
+                logger.info("Started Social Strategy Integrator")
             
             # Initial market regime detection
             if self.enable_market_regime:
@@ -1575,6 +1718,14 @@ class StrategyEvolutionService:
                 market_regime_task.cancel()
                 try:
                     await market_regime_task
+                except asyncio.CancelledError:
+                    pass
+                
+            # Stop the social strategy integrator if it was started
+            if social_strategy_task and not social_strategy_task.done():
+                social_strategy_task.cancel()
+                try:
+                    await social_strategy_task
                 except asyncio.CancelledError:
                     pass
                 

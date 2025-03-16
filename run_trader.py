@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from auto_trader import AutoTrader
 from services.strategy_selection_service import StrategySelectionService
 from services.market_regime_service import MarketRegimeService
+from services.social_strategy_integrator import SocialStrategyIntegrator
 
 def setup_logging():
     """Setup logging configuration"""
@@ -126,6 +127,11 @@ async def run_market_regime_service():
     service = MarketRegimeService()
     await service.run()
 
+async def run_social_strategy_service():
+    """Run the social strategy integrator service"""
+    service = SocialStrategyIntegrator()
+    await service.run()
+
 def run_async_service(async_func):
     """Run an async service in the current thread"""
     loop = asyncio.new_event_loop()
@@ -159,6 +165,15 @@ def main():
         )
         strategy_thread.start()
         logging.info("Strategy selection service started")
+        
+        # Start social strategy integrator in a separate thread
+        social_thread = threading.Thread(
+            target=run_async_service,
+            args=(run_social_strategy_service,),
+            daemon=True
+        )
+        social_thread.start()
+        logging.info("Social strategy integrator service started")
         
         # Small delay to allow services to initialize
         time.sleep(3)
