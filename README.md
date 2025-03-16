@@ -99,6 +99,8 @@ python dashboard.py
 ### 5. Strategy Evolution Service
 - Self-improves trading strategies based on performance data
 - Uses AI to generate and refine trading approaches
+- Integrates social sentiment data into strategy optimization
+- Applies genetic algorithms and GPT-based optimization
 - Maintains a history of strategy performance
 - Logs to: `logs/strategy_evolution.log`
 
@@ -111,32 +113,43 @@ python dashboard.py
 ### 7. Strategy Selection Service
 - Automatically selects optimal trading strategies
 - Considers multiple factors: market regime, historical performance, risk profile, social sentiment
+- Implements time-based adjustments for different market hours
+- Uses advanced scoring algorithms with configurable weights
 - Adapts to changing market conditions in real-time
 - Makes data-driven strategy switching decisions
 - Logs to: `logs/strategy_selection.log`
 
-### 8. Backtesting Framework
+### 8. Social Strategy Integrator
+- Analyzes correlation between social sentiment and price movements
+- Identifies lead/lag relationships in social metrics
+- Generates specialized strategies based on social patterns
+- Optimizes trading parameters based on social sentiment
+- Creates social-specific strategy variants (trend-following, contrarian, etc.)
+- Provides social impact scores for strategy selection
+- Logs to: `logs/social_strategy.log`
+
+### 9. Backtesting Framework
 - Fetches and manages historical market and social data
 - Simulates trading strategy performance on historical data
 - Integrates with the AI trading logic for realistic backtests
 - Generates performance analytics and visualizations
 - Detailed documentation in `backtesting/README.md`
 
-### 9. Model Registry Service
+### 10. Model Registry Service
 - Tracks AI model versions and performance metrics
 - Provides version control for trading models
 - Maintains a registry of all model versions
 - Enables model comparison and selection
 - Logs to: `logs/model_registry.log`
 
-### 10. AI Explainability Service
+### 11. AI Explainability Service
 - Enhances trading decisions with detailed explanations
 - Visualizes factor weights influencing decisions
 - Provides technical and social factors analysis
 - Explains the reasoning behind each trade
 - Logs to: `logs/ai_explainability.log`
 
-### 11. Portfolio Risk Management Service
+### 12. Portfolio Risk Management Service
 - Implements portfolio-wide risk management
 - Calculates Value at Risk (VaR) across the entire portfolio
 - Provides adaptive stop-losses based on market volatility
@@ -220,6 +233,9 @@ python services/market_regime_service.py
 # Start the strategy selection service
 python services/strategy_selection_service.py
 
+# Start the social strategy integrator
+python services/social_strategy_integrator.py
+
 # Start the model registry service
 python run_ai_model_services.py --model-registry
 
@@ -229,7 +245,7 @@ python run_ai_model_services.py --explainability
 # Start the dashboard
 python dashboard.py
 
-# Or use the integrated run_trader.py script to run everything together
+# Or use the integrated run_trader.py script to run everything together (recommended)
 python run_trader.py
 ```
 
@@ -330,10 +346,28 @@ For more detailed instructions, see `backtesting/README.md`.
     "symbol": "BTCUSDC",
     "model_version": "ai_trader_gpt_4o_a1b2c3d4",
     "model_id": "a1b2c3d4",
+    "selected_strategy": {
+        "name": "social_trend_following_v3",
+        "type": "trend_following",
+        "social_optimization": true,
+        "market_regime": "bull",
+        "performance_score": 0.87,
+        "risk_profile": "medium",
+        "social_correlation": 0.72,
+        "time_period": "3h",
+        "selection_factors": {
+            "social_sentiment_score": 0.85,
+            "market_regime_score": 0.92,
+            "historical_performance": 0.78,
+            "risk_score": 0.76
+        }
+    },
     "explanation": {
         "summary": "Strong bullish signals with technical indicators and social sentiment aligned",
         "technical_factors": "RSI at 55.32 showing momentum, MACD positive and increasing, price breaking above resistance",
         "social_factors": "High social engagement (25,000) with very positive sentiment (0.75), increasing social volume",
+        "social_lead_lag": "Social sentiment leads price action by approximately 45 minutes",
+        "correlation_strength": "Strong correlation (0.72) between social metrics and price movements",
         "key_indicators": ["RSI", "MACD", "Social sentiment", "Price action"],
         "risk_assessment": "Medium risk due to some market volatility, but strong technical and social indicators support the trade"
     },
@@ -350,7 +384,9 @@ For more detailed instructions, see `backtesting/README.md`.
             "volume": 0.30,
             "engagement": 0.20
         },
-        "market_context": 0.15
+        "market_regime": 0.25,
+        "strategy_performance": 0.30,
+        "social_correlation": 0.30
     }
 }
 ```
@@ -367,6 +403,12 @@ For more detailed instructions, see `backtesting/README.md`.
 - Missing social metrics: Falls back to default neutral values
 - News processing errors: Skips problematic items while preserving valid ones
 
+### Social Strategy Integrator Errors
+- Correlation analysis failures: Falls back to conservative defaults
+- Strategy generation errors: Retries with alternative parameters
+- Social data synchronization issues: Uses time-windowed matching
+- Lead/lag detection failures: Defaults to concurrent correlation
+
 ### AI Analyzer Errors
 - OpenAI API failures: Logged with full error context
 - Missing market/social data: Detailed validation errors
@@ -376,6 +418,11 @@ For more detailed instructions, see `backtesting/README.md`.
 - Insufficient balance: Logged and trade skipped
 - Order placement failures: Full error context with retry attempts
 - Position management errors: Detailed error tracking
+
+### Strategy Selection Errors
+- Missing factor data: Uses weighted average of available factors
+- Strategy switching conflicts: Implements cool-down periods
+- Time-based adjustment failures: Reverts to default strategy weights
 
 ## Monitoring and Debugging
 
@@ -403,6 +450,18 @@ Solution: Verify LunarCrush API key and symbol support
 ERROR - [AIAnalyzer] OpenAI API error: Invalid model specified
 ```
 Solution: Check OpenAI configuration and API key validity
+
+4. Social Correlation Errors
+```
+ERROR - [SocialStrategyIntegrator] Insufficient data points for correlation analysis
+```
+Solution: Ensure sufficient historical social data is available for the symbol
+
+5. Strategy Selection Conflicts
+```
+ERROR - [StrategySelection] Rapid strategy switching detected, enforcing cool-down period
+```
+Solution: Adjust strategy_switch_threshold in config.json
 
 ## Performance Monitoring
 
