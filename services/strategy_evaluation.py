@@ -1437,13 +1437,19 @@ class StrategyEvaluationSystem:
         logger.info(f"Market condition performance visualizations saved to {viz_dir}")
     
     def compare_strategies(self, strategy_ids: List[str], 
-                          metrics_to_compare: List[str] = None) -> Dict:
+                          metrics_to_compare: List[str] = None,
+                          market_condition: str = None,
+                          time_period: str = None,
+                          normalize_scores: bool = True) -> Dict:
         """
         Compare multiple strategies based on specified metrics.
         
         Args:
             strategy_ids: List of strategy IDs to compare
             metrics_to_compare: List of metrics to use for comparison
+            market_condition: Specific market condition to filter results (optional)
+            time_period: Specific time period to compare (e.g., "last_month", "last_year")
+            normalize_scores: Whether to normalize scores for fair comparison
             
         Returns:
             Dictionary with comparison results
@@ -1455,466 +1461,817 @@ class StrategyEvaluationSystem:
                 'return_pct', 'expectancy', 'calmar_ratio'
             ]
         
-        # Load evaluation results for each strategy
-        strategies = []
-        for strategy_id in strategy_ids:
-            try:
-                with open(os.path.join(self.data_dir, f"{strategy_id}_evaluation.json"), 'r') as f:
-                    strategy_data = json.load(f)
-                    strategies.append(strategy_data)
-            except Exception as e:
-                logger.warning(f"Could not load evaluation for strategy {strategy_id}: {e}")
+        # Load data sources based on input parameters
+        strategy_data = {}
         
-        if not strategies:
+        if market_condition:
+            # Load cross-validation results to compare strategies in specific market conditions
+            for strategy_id in strategy_ids:
+                try:
+                    cv_file = os.path.join(self.data_dir, f"{strategy_id}_cv_results.json")
+                    if os.path.exists(cv_file):
+                        with open(cv_file, 'r') as f:
+                            cv_data = json.load(f)
+                            # Extract data for the specified market condition
+                            for fold in cv_data["fold_results"]:
+                                if fold.get("market_condition_name") == market_condition:
+                                    strategy_data[strategy_id] = {
+                                        "strategy_id": strategy_id,
+                                        "metrics": fold["test_metrics"],
+                                        "score": fold["test_score"],
+                                        "market_condition": market_condition,
+                                        "parameters": cv_data["parameters"]
+                                    }
+                                    break
+                except Exception as e:
+                    logger.warning(f"Could not load CV results for strategy {strategy_id}: {e}")
+        elif time_period:
+            # Load historical evaluation data for the specified time period
+            time_filter = self._parse_time_period(time_period)
+            for strategy_id in strategy_ids:
+                try:
+                    # Find all evaluation files for this strategy
+                    eval_files = [f for f in os.listdir(self.data_dir) 
+                                if f.startswith(f"{strategy_id}_") and f.endswith("_evaluation.json")]
+                    # Sort by timestamp (newest first)
+                    eval_files.sort(key=lambda f: os.path.getmtime(os.path.join(self.data_dir, f)), reverse=True)
+                    
+                    for eval_file in eval_files:
+                        file_time = datetime.fromtimestamp(os.path.getmtime(os.path.join(self.data_dir, eval_file)))
+                        if file_time >= time_filter:
+                            with open(os.path.join(self.data_dir, eval_file), 'r') as f:
+                                eval_data = json.load(f)
+                                strategy_data[strategy_id] = eval_data
+                                break
+                except Exception as e:
+                    logger.warning(f"Could not load time-filtered evaluation for strategy {strategy_id}: {e}")
+        else:
+            # Load the most recent evaluation data for each strategy
+            for strategy_id in strategy_ids:
+                try:
+                    eval_file = os.path.join(self.data_dir, f"{strategy_id}_evaluation.json")
+                    if os.path.exists(eval_file):
+                        with open(eval_file, 'r') as f:
+                            strategy_data[strategy_id] = json.load(f)
+                except Exception as e:
+                    logger.warning(f"Could not load evaluation for strategy {strategy_id}: {e}")
+        
+        # If no data found for any strategy, try to run evaluations on missing strategies
+        missing_strategies = [sid for sid in strategy_ids if sid not in strategy_data]
+        if missing_strategies and not (market_condition or time_period):
+            for strategy_id in missing_strategies:
+                try:
+                    # Check if we have parameters for this strategy
+                    params_file = os.path.join(self.data_dir, f"{strategy_id}_parameters.json")
+                    if os.path.exists(params_file):
+                        with open(params_file, 'r') as f:
+                            parameters = json.load(f)
+                            # Run evaluation with these parameters
+                            synthetic_data = self._generate_synthetic_market_data("default", 
+                                                                              "2023-01-01", 
+                                                                              "2023-01-31")
+                            trades = self._simulate_trades(strategy_id, parameters, synthetic_data)
+                            metrics = StrategyPerformanceMetrics.calculate_metrics(trades)
+                            score = self._calculate_strategy_score(metrics)
+                            
+                            strategy_data[strategy_id] = {
+                                "strategy_id": strategy_id,
+                                "metrics": metrics,
+                                "score": score,
+                                "parameters": parameters,
+                                "timestamp": datetime.now().isoformat(),
+                                "note": "Generated from synthetic data for comparison"
+                            }
+                except Exception as e:
+                    logger.warning(f"Could not generate evaluation for missing strategy {strategy_id}: {e}")
+        
+        if not strategy_data:
             logger.error("No valid strategies found for comparison")
-            return {"error": "No valid strategies found"}
+            return {"error": "No valid strategies found for comparison"}
         
-        # Extract metrics for comparison
+        # Extract comparison metrics
         comparison_data = {
-            "strategy_ids": strategy_ids,
+            "strategy_ids": list(strategy_data.keys()),
             "metrics": {},
             "best_strategy": None,
             "best_strategy_score": -float('inf'),
-            "comparison_timestamp": datetime.now().isoformat()
+            "comparison_timestamp": datetime.now().isoformat(),
+            "market_condition": market_condition,
+            "time_period": time_period,
+            "strategy_parameters": {}
         }
+        
+        # Store parameters for each strategy
+        for strategy_id, data in strategy_data.items():
+            comparison_data["strategy_parameters"][strategy_id] = data.get("parameters", {})
         
         # Compare each metric
         for metric in metrics_to_compare:
             comparison_data["metrics"][metric] = {}
             
-            for strategy in strategies:
-                strategy_id = strategy["strategy_id"]
-                metric_value = strategy["metrics"].get(metric, 0)
+            metric_values = {}
+            for strategy_id, data in strategy_data.items():
+                metric_value = data.get("metrics", {}).get(metric, 0)
                 comparison_data["metrics"][metric][strategy_id] = metric_value
+                metric_values[strategy_id] = metric_value
+            
+            if not metric_values:
+                continue
+                
+            # Normalize metric values if requested
+            if normalize_scores:
+                normalized_values = self._normalize_metric_values(metric_values, metric)
+                comparison_data["metrics"][metric]["normalized"] = normalized_values
             
             # Determine best value for this metric
             if metric in ['max_drawdown']:  # Lower is better
-                best_strategy = min(comparison_data["metrics"][metric].items(), key=lambda x: x[1])
+                best_strategy = min(metric_values.items(), key=lambda x: x[1])
             else:  # Higher is better
-                best_strategy = max(comparison_data["metrics"][metric].items(), key=lambda x: x[1])
+                best_strategy = max(metric_values.items(), key=lambda x: x[1])
             
             comparison_data["metrics"][metric]["best"] = best_strategy[0]
         
-        # Calculate overall best strategy
-        for strategy in strategies:
-            strategy_id = strategy["strategy_id"]
-            score = strategy["score"]
+        # Calculate overall scores based on weighted metrics
+        overall_scores = {}
+        metric_weights = self.optimization_goals.get("metric_weights", {})
+        
+        for strategy_id in strategy_data:
+            # Default equal weighting if no weights specified
+            if not metric_weights:
+                # Equal weights for all metrics
+                weights = {metric: 1.0 / len(metrics_to_compare) for metric in metrics_to_compare}
+            else:
+                weights = metric_weights
+                
+            # Calculate weighted score
+            total_score = 0
+            total_weight = 0
             
-            if score > comparison_data["best_strategy_score"]:
-                comparison_data["best_strategy_score"] = score
-                comparison_data["best_strategy"] = strategy_id
+            for metric, weight in weights.items():
+                if metric not in metrics_to_compare:
+                    continue
+                    
+                metric_value = comparison_data["metrics"].get(metric, {}).get(strategy_id, 0)
+                
+                # For metrics where lower is better, invert the value
+                if metric in ['max_drawdown']:
+                    # Avoid division by zero
+                    if metric_value > 0:
+                        metric_value = 1.0 / metric_value
+                    else:
+                        metric_value = float('inf')
+                
+                total_score += metric_value * weight
+                total_weight += weight
+            
+            # Calculate final weighted score
+            if total_weight > 0:
+                overall_scores[strategy_id] = total_score / total_weight
+            else:
+                overall_scores[strategy_id] = 0
+        
+        # Find best overall strategy
+        if overall_scores:
+            best_strategy = max(overall_scores.items(), key=lambda x: x[1])
+            comparison_data["best_strategy"] = best_strategy[0]
+            comparison_data["best_strategy_score"] = best_strategy[1]
+            comparison_data["overall_scores"] = overall_scores
         
         # Generate comparison visualizations
-        self._visualize_comparison(comparison_data)
+        self._visualize_enhanced_comparison(comparison_data)
         
+        # Store comparison results
+        comparison_id = f"comparison_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        results_path = os.path.join(self.data_dir, f"{comparison_id}.json")
+        with open(results_path, 'w') as f:
+            json.dump(comparison_data, f, indent=2, default=str)
+        
+        comparison_data["results_path"] = results_path
         return comparison_data
     
-    def _visualize_comparison(self, comparison_data: Dict) -> None:
+    def _parse_time_period(self, time_period: str) -> datetime:
         """
-        Generate visualizations comparing strategies.
+        Parse a time period string into a datetime object.
         
         Args:
-            comparison_data: Dictionary with strategy comparison data
+            time_period: Time period string (e.g., "last_month", "last_year", "last_week")
+            
+        Returns:
+            Datetime object representing the cutoff time
+        """
+        now = datetime.now()
+        
+        if time_period == "last_day":
+            return now - timedelta(days=1)
+        elif time_period == "last_week":
+            return now - timedelta(days=7)
+        elif time_period == "last_month":
+            return now - timedelta(days=30)
+        elif time_period == "last_quarter":
+            return now - timedelta(days=90)
+        elif time_period == "last_year":
+            return now - timedelta(days=365)
+        elif time_period == "last_3_months":
+            return now - timedelta(days=90)
+        elif time_period == "last_6_months":
+            return now - timedelta(days=180)
+        elif time_period == "ytd":  # Year to date
+            return datetime(now.year, 1, 1)
+        else:
+            # Default to last 30 days if unknown period
+            logger.warning(f"Unknown time period: {time_period}, defaulting to last_month")
+            return now - timedelta(days=30)
+    
+    def _normalize_metric_values(self, metric_values: Dict[str, float], metric: str) -> Dict[str, float]:
+        """
+        Normalize metric values for fair comparison.
+        
+        Args:
+            metric_values: Dictionary of metric values by strategy ID
+            metric: The metric being normalized
+            
+        Returns:
+            Dictionary of normalized values
+        """
+        values = list(metric_values.values())
+        if not values:
+            return {}
+            
+        # Special handling for metrics where lower is better
+        if metric in ['max_drawdown']:
+            # Invert values so higher is better
+            inverted_values = {}
+            for strategy_id, value in metric_values.items():
+                if value > 0:
+                    inverted_values[strategy_id] = 1.0 / value
+                else:
+                    inverted_values[strategy_id] = float('inf')
+            
+            values = list(inverted_values.values())
+        
+        # Min-max normalization
+        min_val = min(values)
+        max_val = max(values)
+        
+        range_val = max_val - min_val
+        
+        normalized = {}
+        for strategy_id, value in metric_values.items():
+            if range_val > 0:
+                if metric in ['max_drawdown']:
+                    # For metrics where lower is better, invert before normalizing
+                    if value > 0:
+                        inv_value = 1.0 / value
+                        normalized[strategy_id] = (inv_value - min_val) / range_val
+                    else:
+                        normalized[strategy_id] = 1.0  # Perfect score for zero drawdown
+                else:
+                    # For metrics where higher is better
+                    normalized[strategy_id] = (value - min_val) / range_val
+            else:
+                normalized[strategy_id] = 0.5  # All values are the same
+        
+        return normalized
+    
+    def _visualize_enhanced_comparison(self, comparison_data: Dict) -> None:
+        """
+        Generate enhanced visualizations for strategy comparison.
+        
+        Args:
+            comparison_data: Dictionary of comparison results
         """
         strategy_ids = comparison_data["strategy_ids"]
-        metrics = comparison_data["metrics"]
+        if not strategy_ids:
+            return
+            
+        # Create visualization directory
+        viz_dir = os.path.join(self.reports_dir, "strategy_comparison")
+        os.makedirs(viz_dir, exist_ok=True)
         
-        # Create a radar chart for strategy comparison
-        plt.figure(figsize=(10, 8))
+        # Get metrics
+        metrics = list(comparison_data["metrics"].keys())
         
-        # Set up the radar chart
-        metrics_list = list(metrics.keys())
-        num_metrics = len(metrics_list)
+        # 1. Spider/Radar chart for all metrics
+        self._create_strategy_radar_chart(comparison_data, viz_dir)
         
-        # Compute angle for each metric
-        angles = np.linspace(0, 2*np.pi, num_metrics, endpoint=False).tolist()
+        # 2. Bar charts for individual metrics
+        self._create_metric_bar_charts(comparison_data, viz_dir)
+        
+        # 3. Overall score comparison
+        if "overall_scores" in comparison_data:
+            plt.figure(figsize=(12, 6))
+            
+            scores = comparison_data["overall_scores"]
+            sorted_items = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+            strategies = [item[0] for item in sorted_items]
+            values = [item[1] for item in sorted_items]
+            
+            # Color bars based on score
+            bars = plt.bar(strategies, values, alpha=0.7)
+            for i, bar in enumerate(bars):
+                if values[i] >= 0.8 * max(values):
+                    bar.set_color('green')
+                elif values[i] >= 0.5 * max(values):
+                    bar.set_color('blue')
+                else:
+                    bar.set_color('orange')
+            
+            plt.title('Overall Strategy Score Comparison')
+            plt.xlabel('Strategy')
+            plt.ylabel('Score')
+            plt.grid(True, axis='y')
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            plt.savefig(os.path.join(viz_dir, 'overall_scores.png'))
+            plt.close()
+        
+        # 4. Strategy parameter comparison table
+        if "strategy_parameters" in comparison_data:
+            self._create_parameter_comparison_table(comparison_data, viz_dir)
+        
+        # 5. Rank summary table
+        self._create_rank_summary_table(comparison_data, viz_dir)
+        
+        # 6. Summary report with market condition context
+        self._create_comparison_summary_report(comparison_data, viz_dir)
+        
+        logger.info(f"Enhanced strategy comparison visualizations saved to {viz_dir}")
+    
+    def _create_strategy_radar_chart(self, comparison_data: Dict, viz_dir: str) -> None:
+        """
+        Create a radar chart comparing strategies across all metrics.
+        
+        Args:
+            comparison_data: Dictionary of comparison results
+            viz_dir: Directory to save visualizations
+        """
+        strategy_ids = comparison_data["strategy_ids"]
+        metrics = list(comparison_data["metrics"].keys())
+        
+        # Create a radar chart for all metrics
+        plt.figure(figsize=(12, 10))
+        
+        # Number of variables
+        N = len(metrics)
+        if N < 3:
+            # Need at least 3 metrics for a radar chart
+            return
+            
+        # Create angles for each metric
+        angles = [n / float(N) * 2 * np.pi for n in range(N)]
         angles += angles[:1]  # Close the loop
         
-        # Initialize radar plot
+        # Create subplot with polar projection
         ax = plt.subplot(111, polar=True)
+        
+        # Format metric labels for display
+        metric_labels = [m.replace('_', ' ').title() for m in metrics]
+        plt.xticks(angles[:-1], metric_labels)
         
         # Plot each strategy
         for strategy_id in strategy_ids:
+            # Get normalized values if available, otherwise use raw values
             values = []
-            for metric in metrics_list:
-                # Get metric value for this strategy
-                value = metrics[metric].get(strategy_id, 0)
-                
-                # Normalize value relative to best
-                best_strategy = metrics[metric].get("best")
-                best_value = metrics[metric].get(best_strategy, 0)
-                
-                if best_value == 0:
-                    normalized_value = 0
+            for metric in metrics:
+                if "normalized" in comparison_data["metrics"][metric]:
+                    value = comparison_data["metrics"][metric]["normalized"].get(strategy_id, 0)
                 else:
-                    # For 'max_drawdown', lower is better so invert the normalization
-                    if metric == 'max_drawdown':
-                        # Avoid division by zero
-                        if value == 0:
-                            normalized_value = 1
+                    # Get raw values and normalize them for display
+                    all_values = [comparison_data["metrics"][metric].get(sid, 0) for sid in strategy_ids 
+                                  if isinstance(comparison_data["metrics"][metric].get(sid, 0), (int, float))]
+                    if all_values:
+                        min_val = min(all_values)
+                        max_val = max(all_values)
+                        range_val = max_val - min_val
+                        
+                        raw_value = comparison_data["metrics"][metric].get(strategy_id, 0)
+                        if isinstance(raw_value, (int, float)):
+                            if range_val > 0:
+                                if metric in ['max_drawdown']:  # Lower is better
+                                    value = 1 - ((raw_value - min_val) / range_val)
+                                else:  # Higher is better
+                                    value = (raw_value - min_val) / range_val
+                            else:
+                                value = 0.5  # All values are the same
                         else:
-                            normalized_value = min(1, best_value / value)
+                            value = 0  # Non-numeric value
                     else:
-                        normalized_value = min(1, value / best_value)
+                        value = 0
                 
-                values.append(normalized_value)
+                values.append(value)
             
             # Close the loop for the radar chart
             values += values[:1]
             
             # Plot strategy
-            ax.plot(angles, values, linewidth=1, label=strategy_id)
+            ax.plot(angles, values, linewidth=2, label=strategy_id)
             ax.fill(angles, values, alpha=0.1)
-        
-        # Set labels and properties
-        plt.xticks(angles[:-1], metrics_list)
-        ax.set_rlabel_position(0)
-        plt.yticks([0.2, 0.4, 0.6, 0.8, 1.0], ["0.2", "0.4", "0.6", "0.8", "1.0"], color="grey", size=7)
-        plt.ylim(0, 1)
         
         # Add legend
         plt.legend(loc='upper right', bbox_to_anchor=(0.1, 0.1))
         
-        # Save the comparison visualization
-        comparison_file = os.path.join(self.reports_dir, "strategy_comparison.png")
-        plt.savefig(comparison_file)
+        # Set title based on market condition or time period
+        title = 'Strategy Comparison Across Metrics'
+        if comparison_data.get("market_condition"):
+            title += f" ({comparison_data['market_condition']} Market)"
+        elif comparison_data.get("time_period"):
+            title += f" ({comparison_data['time_period']})"
+            
+        plt.title(title)
+        plt.grid(True)
+        plt.savefig(os.path.join(viz_dir, 'strategy_radar_chart.png'))
+        plt.close()
+    
+    def _create_metric_bar_charts(self, comparison_data: Dict, viz_dir: str) -> None:
+        """
+        Create individual bar charts for each metric.
         
-        # Create bar chart comparison for each metric
-        for metric in metrics_list:
+        Args:
+            comparison_data: Dictionary of comparison results
+            viz_dir: Directory to save visualizations
+        """
+        strategy_ids = comparison_data["strategy_ids"]
+        
+        # Create metric subfolder
+        metrics_dir = os.path.join(viz_dir, 'metrics')
+        os.makedirs(metrics_dir, exist_ok=True)
+        
+        # Create a bar chart for each metric
+        for metric, values in comparison_data["metrics"].items():
+            if metric in ['best', 'normalized']:
+                continue
+                
             plt.figure(figsize=(10, 6))
             
-            # Extract values for this metric
-            strategy_values = []
+            # Extract values for each strategy
+            metric_values = {}
             for strategy_id in strategy_ids:
-                strategy_values.append(metrics[metric].get(strategy_id, 0))
+                if strategy_id in values and isinstance(values[strategy_id], (int, float)):
+                    metric_values[strategy_id] = values[strategy_id]
             
-            # Determine bar colors
-            if metric == 'max_drawdown':
-                # For drawdown, lower is better
-                colors = ['green' if v == min(strategy_values) else 'skyblue' for v in strategy_values]
-            else:
-                # For all others, higher is better
-                colors = ['green' if v == max(strategy_values) else 'skyblue' for v in strategy_values]
+            if not metric_values:
+                continue
+                
+            # Sort strategies by metric value
+            if metric in ['max_drawdown']:  # Lower is better
+                sorted_items = sorted(metric_values.items(), key=lambda x: x[1])
+            else:  # Higher is better
+                sorted_items = sorted(metric_values.items(), key=lambda x: x[1], reverse=True)
+                
+            sorted_strategies = [item[0] for item in sorted_items]
+            sorted_values = [item[1] for item in sorted_items]
             
             # Create bar chart
-            plt.bar(strategy_ids, strategy_values, color=colors)
-            plt.title(f"Comparison of {metric}")
-            plt.xlabel("Strategy")
+            bars = plt.bar(sorted_strategies, sorted_values, alpha=0.7)
+            
+            # Color the best strategy bar
+            best_strategy = values.get("best")
+            for i, strategy in enumerate(sorted_strategies):
+                if strategy == best_strategy:
+                    bars[i].set_color('green')
+                else:
+                    bars[i].set_color('skyblue')
+            
+            # Format metric name for display
+            metric_display = metric.replace('_', ' ').title()
+            
+            plt.title(f'{metric_display} Comparison')
+            plt.xlabel('Strategy')
+            plt.ylabel(metric_display)
+            plt.grid(True, axis='y')
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            
+            # Save metric-specific chart
+            plt.savefig(os.path.join(metrics_dir, f'{metric}_comparison.png'))
+            plt.close()
+    
+    def _create_parameter_comparison_table(self, comparison_data: Dict, viz_dir: str) -> None:
+        """
+        Create a visual table comparing strategy parameters.
+        
+        Args:
+            comparison_data: Dictionary of comparison results
+            viz_dir: Directory to save visualizations
+        """
+        # Extract parameters and strategies
+        parameters = comparison_data.get("strategy_parameters", {})
+        if not parameters:
+            return
+            
+        # Find common parameters across all strategies
+        common_params = set()
+        for strategy_id, params in parameters.items():
+            if not common_params:
+                common_params = set(params.keys())
+            else:
+                common_params &= set(params.keys())
+        
+        if not common_params:
+            return
+            
+        # Create figure for table
+        fig, ax = plt.figure(figsize=(12, 8)), plt.subplot(111)
+        ax.axis('off')
+        
+        # Create table data
+        table_data = []
+        
+        # Header row with parameter names
+        header = ['Strategy']
+        header.extend([param.replace('_', ' ').title() for param in sorted(common_params)])
+        table_data.append(header)
+        
+        # Add rows for each strategy
+        for strategy_id, params in parameters.items():
+            row = [strategy_id]
+            for param in sorted(common_params):
+                value = params.get(param, '')
+                if isinstance(value, float):
+                    row.append(f"{value:.2f}")
+                else:
+                    row.append(str(value))
+            table_data.append(row)
+        
+        # Create and style table
+        table = ax.table(cellText=table_data, loc='center', cellLoc='center')
+        table.auto_set_font_size(False)
+        table.set_fontsize(10)
+        table.scale(1, 1.5)
+        
+        # Style header row
+        for j in range(len(table_data[0])):
+            table[(0, j)].set_facecolor('#b4b4b4')
+            table[(0, j)].set_text_props(weight='bold')
+        
+        # Highlight best strategy row
+        best_strategy = comparison_data.get("best_strategy")
+        if best_strategy:
+            for i, row in enumerate(table_data):
+                if i > 0 and row[0] == best_strategy:
+                    for j in range(len(row)):
+                        table[(i, j)].set_facecolor('#e0f0e0')
+        
+        plt.title('Strategy Parameter Comparison', fontsize=14, pad=20)
+        plt.savefig(os.path.join(viz_dir, 'parameter_comparison.png'), bbox_inches='tight')
+        plt.close()
+    
+    def _create_rank_summary_table(self, comparison_data: Dict, viz_dir: str) -> None:
+        """
+        Create a table showing the rank of each strategy for each metric.
+        
+        Args:
+            comparison_data: Dictionary of comparison results
+            viz_dir: Directory to save visualizations
+        """
+        strategy_ids = comparison_data["strategy_ids"]
+        
+        # Create ranking data for each metric
+        rankings = {}
+        for metric, values in comparison_data["metrics"].items():
+            if metric in ['best', 'normalized']:
+                continue
+                
+            # Create dictionary of strategy: value for ranking
+            metric_values = {}
+            for strategy_id in strategy_ids:
+                if strategy_id in values and isinstance(values[strategy_id], (int, float)):
+                    metric_values[strategy_id] = values[strategy_id]
+            
+            if not metric_values:
+                continue
+                
+            # Sort strategies by metric value
+            if metric in ['max_drawdown']:  # Lower is better
+                sorted_items = sorted(metric_values.items(), key=lambda x: x[1])
+            else:  # Higher is better
+                sorted_items = sorted(metric_values.items(), key=lambda x: x[1], reverse=True)
+                
+            # Assign ranks (1 is best)
+            rankings[metric] = {}
+            for rank, (strategy_id, _) in enumerate(sorted_items):
+                rankings[metric][strategy_id] = rank + 1
+        
+        if not rankings:
+            return
+            
+        # Calculate average rank for each strategy
+        avg_ranks = {}
+        for strategy_id in strategy_ids:
+            ranks = [rankings[metric][strategy_id] for metric in rankings if strategy_id in rankings[metric]]
+            if ranks:
+                avg_ranks[strategy_id] = sum(ranks) / len(ranks)
+        
+        # Create figure for table
+        fig, ax = plt.figure(figsize=(12, 8)), plt.subplot(111)
+        ax.axis('off')
+        
+        # Create table data
+        table_data = []
+        
+        # Header row with metric names
+        metrics = list(rankings.keys())
+        header = ['Strategy']
+        header.extend([metric.replace('_', ' ').title() for metric in metrics])
+        header.append('Avg Rank')
+        table_data.append(header)
+        
+        # Sort strategies by average rank
+        sorted_strategies = sorted(avg_ranks.items(), key=lambda x: x[1])
+        
+        # Add rows for each strategy
+        for strategy_id, avg_rank in sorted_strategies:
+            row = [strategy_id]
+            for metric in metrics:
+                row.append(str(rankings[metric].get(strategy_id, '-')))
+            row.append(f"{avg_rank:.2f}")
+            table_data.append(row)
+        
+        # Create and style table
+        table = ax.table(cellText=table_data, loc='center', cellLoc='center')
+        table.auto_set_font_size(False)
+        table.set_fontsize(10)
+        table.scale(1, 1.5)
+        
+        # Style header row
+        for j in range(len(table_data[0])):
+            table[(0, j)].set_facecolor('#b4b4b4')
+            table[(0, j)].set_text_props(weight='bold')
+        
+        # Style rank columns - color based on rank
+        for i in range(1, len(table_data)):
+            for j in range(1, len(metrics) + 1):
+                try:
+                    rank = int(table_data[i][j])
+                    if rank == 1:
+                        table[(i, j)].set_facecolor('#90ee90')  # Light green for 1st
+                    elif rank == 2:
+                        table[(i, j)].set_facecolor('#add8e6')  # Light blue for 2nd
+                    elif rank == 3:
+                        table[(i, j)].set_facecolor('#ffffe0')  # Light yellow for 3rd
+                except (ValueError, TypeError):
+                    pass
+            
+            # Style average rank column
+            avg_rank_col = len(metrics) + 1
+            table[(i, avg_rank_col)].set_facecolor('#e0e0e0')
+        
+        plt.title('Strategy Ranking by Metric', fontsize=14, pad=20)
+        plt.savefig(os.path.join(viz_dir, 'strategy_rankings.png'), bbox_inches='tight')
+        plt.close()
+    
+    def _create_comparison_summary_report(self, comparison_data: Dict, viz_dir: str) -> None:
+        """
+        Create an HTML summary report of the strategy comparison.
+        
+        Args:
+            comparison_data: Dictionary of comparison results
+            viz_dir: Directory to save visualizations
+        """
+        # Generate an HTML report summarizing the comparison
+        strategy_ids = comparison_data["strategy_ids"]
+        best_strategy = comparison_data.get("best_strategy")
+        
+        # Format timestamp
+        timestamp = comparison_data.get("comparison_timestamp", datetime.now().isoformat())
+        if isinstance(timestamp, str):
+            try:
+                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except:
+                formatted_time = timestamp
+        else:
+            formatted_time = timestamp
+        
+        # Create HTML content
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Strategy Comparison Report</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 20px; }}
+                h1, h2, h3 {{ color: #333366; }}
+                .summary {{ background-color: #f0f0f0; padding: 15px; border-radius: 5px; margin-bottom: 20px; }}
+                .best-strategy {{ color: #009900; font-weight: bold; }}
+                .image-container {{ margin: 20px 0; }}
+                table {{ border-collapse: collapse; width: 100%; margin-bottom: 20px; }}
+                th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+                th {{ background-color: #f2f2f2; }}
+                tr:nth-child(even) {{ background-color: #f9f9f9; }}
+                .footer {{ margin-top: 30px; font-size: 0.8em; color: #666; }}
+            </style>
+        </head>
+        <body>
+            <h1>Strategy Comparison Report</h1>
+            
+            <div class="summary">
+                <h2>Comparison Summary</h2>
+                <p><strong>Date:</strong> {formatted_time}</p>
+                <p><strong>Strategies Compared:</strong> {len(strategy_ids)}</p>
+        """
+        
+        # Add market condition or time period if available
+        if comparison_data.get("market_condition"):
+            html_content += f"<p><strong>Market Condition:</strong> {comparison_data['market_condition']}</p>"
+        elif comparison_data.get("time_period"):
+            html_content += f"<p><strong>Time Period:</strong> {comparison_data['time_period']}</p>"
+        
+        # Add best strategy information
+        if best_strategy:
+            html_content += f"""
+                <p><strong>Best Overall Strategy:</strong> <span class="best-strategy">{best_strategy}</span></p>
+                <p><strong>Overall Score:</strong> {comparison_data.get("best_strategy_score", "N/A"):.4f}</p>
+            """
+        
+        html_content += """
+            </div>
+            
+            <h2>Performance Visualizations</h2>
+            
+            <div class="image-container">
+                <h3>Strategy Comparison Across Metrics</h3>
+                <img src="strategy_radar_chart.png" alt="Strategy Radar Chart" style="max-width: 100%;">
+            </div>
+            
+            <div class="image-container">
+                <h3>Overall Strategy Scores</h3>
+                <img src="overall_scores.png" alt="Overall Scores" style="max-width: 100%;">
+            </div>
+            
+            <div class="image-container">
+                <h3>Strategy Parameters</h3>
+                <img src="parameter_comparison.png" alt="Parameter Comparison" style="max-width: 100%;">
+            </div>
+            
+            <div class="image-container">
+                <h3>Strategy Rankings</h3>
+                <img src="strategy_rankings.png" alt="Strategy Rankings" style="max-width: 100%;">
+            </div>
+            
+            <h2>Individual Metric Comparisons</h2>
+            <p>See the 'metrics' folder for detailed charts of each performance metric.</p>
+            
+            <div class="footer">
+                <p>Generated at {formatted_time}</p>
+            </div>
+        </body>
+        </html>
+        """
+        
+        # Write HTML to file
+        with open(os.path.join(viz_dir, 'comparison_report.html'), 'w') as f:
+            f.write(html_content)
+        
+        logger.info(f"Strategy comparison report saved to {os.path.join(viz_dir, 'comparison_report.html')}")
+    
+    def _visualize_comparison(self, comparison_data: Dict) -> None:
+        """
+        Generate basic visualizations comparing strategies.
+        
+        Args:
+            comparison_data: Dictionary of comparison results
+        """
+        # This is the original visualization method, kept for backward compatibility
+        # For new visualizations, use _visualize_enhanced_comparison
+        
+        strategy_ids = comparison_data["strategy_ids"]
+        metrics = comparison_data["metrics"]
+        
+        # Create a bar chart for each metric
+        for metric, values in metrics.items():
+            if metric == 'best':
+                continue
+                
+            plt.figure(figsize=(10, 6))
+            
+            # Extract values for each strategy
+            strategies = []
+            metric_values = []
+            
+            for strategy_id in strategy_ids:
+                if strategy_id in values:
+                    strategies.append(strategy_id)
+                    metric_values.append(values[strategy_id])
+            
+            # Create bar chart
+            plt.bar(strategies, metric_values)
+            
+            # Highlight best strategy
+            best_strategy = values.get("best")
+            if best_strategy in strategies:
+                best_idx = strategies.index(best_strategy)
+                plt.bar([strategies[best_idx]], [metric_values[best_idx]], color='green')
+            
+            plt.title(f'Comparison of {metric}')
+            plt.xlabel('Strategy')
             plt.ylabel(metric)
             plt.grid(True, axis='y')
+            plt.xticks(rotation=45)
             
-            # Save the metric comparison
-            metric_file = os.path.join(self.reports_dir, f"comparison_{metric}.png")
-            plt.savefig(metric_file)
+            # Save the chart
+            plt.tight_layout()
+            plt.savefig(f"reports/comparison_{metric}.png")
             plt.close()
         
-        logger.info(f"Strategy comparison visualizations saved to {self.reports_dir}")
-    
-    def export_results(self, strategy_id: str, format: str = "json") -> str:
-        """
-        Export evaluation results in the specified format.
-        
-        Args:
-            strategy_id: ID of the strategy to export
-            format: Output format (json, csv, html)
-            
-        Returns:
-            Path to the exported file
-        """
-        # Load evaluation results
-        try:
-            with open(os.path.join(self.data_dir, f"{strategy_id}_evaluation.json"), 'r') as f:
-                strategy_data = json.load(f)
-        except Exception as e:
-            logger.error(f"Could not load evaluation for strategy {strategy_id}: {e}")
-            return None
-        
-        output_file = None
-        
-        if format == "json":
-            # Already in JSON format, just copy to reports directory
-            output_file = os.path.join(self.reports_dir, f"{strategy_id}_evaluation.json")
-            with open(output_file, 'w') as f:
-                json.dump(strategy_data, f, indent=2, default=str)
-        
-        elif format == "csv":
-            # Convert to CSV format
-            output_file = os.path.join(self.reports_dir, f"{strategy_id}_evaluation.csv")
-            
-            # Create a flat structure for CSV
-            metrics = strategy_data["metrics"]
-            parameters = strategy_data["parameters"]
-            
-            # Combine into a single dictionary
-            csv_data = {
-                "strategy_id": strategy_id,
-                "score": strategy_data["score"],
-                "timestamp": strategy_data["timestamp"]
-            }
-            
-            # Add metrics with prefix
-            for key, value in metrics.items():
-                if not isinstance(value, (dict, list)):
-                    csv_data[f"metric_{key}"] = value
-            
-            # Add parameters with prefix
-            for key, value in parameters.items():
-                csv_data[f"param_{key}"] = value
-            
-            # Write to CSV
-            with open(output_file, 'w') as f:
-                # Header row
-                f.write(",".join(csv_data.keys()) + "\n")
-                # Data row
-                f.write(",".join([str(value) for value in csv_data.values()]) + "\n")
-        
-        elif format == "html":
-            # Create HTML report
-            output_file = os.path.join(self.reports_dir, f"{strategy_id}_evaluation.html")
-            
-            html_content = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Strategy Evaluation: {strategy_id}</title>
-                <style>
-                    body {{ font-family: Arial, sans-serif; margin: 20px; }}
-                    h1, h2, h3 {{ color: #333366; }}
-                    table {{ border-collapse: collapse; width: 100%; margin-bottom: 20px; }}
-                    th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-                    th {{ background-color: #f2f2f2; }}
-                    tr:nth-child(even) {{ background-color: #f9f9f9; }}
-                    .metric-good {{ color: green; }}
-                    .metric-bad {{ color: red; }}
-                    .metric-neutral {{ color: black; }}
-                    .section {{ margin-bottom: 30px; }}
-                    img {{ max-width: 100%; height: auto; }}
-                </style>
-            </head>
-            <body>
-                <h1>Strategy Evaluation Report</h1>
-                <div class="section">
-                    <h2>Strategy Information</h2>
-                    <table>
-                        <tr><th>Strategy ID</th><td>{strategy_id}</td></tr>
-                        <tr><th>Score</th><td>{strategy_data["score"]:.4f}</td></tr>
-                        <tr><th>Evaluation Date</th><td>{strategy_data["timestamp"]}</td></tr>
-                    </table>
-                </div>
-                
-                <div class="section">
-                    <h2>Performance Metrics</h2>
-                    <table>
-                        <tr><th>Metric</th><th>Value</th></tr>
-            """
-            
-            # Add metrics rows
-            metrics = strategy_data["metrics"]
-            for key, value in sorted(metrics.items()):
-                if not isinstance(value, (dict, list)):
-                    # Determine color class based on metric
-                    css_class = "metric-neutral"
-                    if key in ["sharpe_ratio", "sortino_ratio", "calmar_ratio", "win_rate", "profit_factor"]:
-                        css_class = "metric-good" if value > 1 else "metric-bad"
-                    elif key == "max_drawdown":
-                        css_class = "metric-bad" if value > 0.2 else "metric-good"
-                    
-                    # Format value
-                    if isinstance(value, float):
-                        formatted_value = f"{value:.4f}"
-                    else:
-                        formatted_value = str(value)
-                    
-                    html_content += f'<tr><th>{key}</th><td class="{css_class}">{formatted_value}</td></tr>'
-            
-            html_content += """
-                    </table>
-                </div>
-                
-                <div class="section">
-                    <h2>Strategy Parameters</h2>
-                    <table>
-                        <tr><th>Parameter</th><th>Value</th></tr>
-            """
-            
-            # Add parameters rows
-            parameters = strategy_data["parameters"]
-            for key, value in sorted(parameters.items()):
-                html_content += f"<tr><th>{key}</th><td>{value}</td></tr>"
-            
-            html_content += """
-                    </table>
-                </div>
-                
-                <div class="section">
-                    <h2>Performance Visualizations</h2>
-                    <div>
-                        <h3>Equity Curve</h3>
-                        <img src="equity_curve.png" alt="Equity Curve">
-                    </div>
-                    <div>
-                        <h3>Drawdown</h3>
-                        <img src="drawdown_chart.png" alt="Drawdown Chart">
-                    </div>
-                </div>
-            </body>
-            </html>
-            """
-            
-            with open(output_file, 'w') as f:
-                f.write(html_content)
-        
-        else:
-            logger.error(f"Unsupported export format: {format}")
-            return None
-        
-        logger.info(f"Exported {strategy_id} evaluation to {output_file}")
-        return output_file
-    
-    def load_historical_evaluations(self, max_count: int = 10) -> Dict:
-        """
-        Load historical strategy evaluations for analysis.
-        
-        Args:
-            max_count: Maximum number of evaluations to load
-            
-        Returns:
-            Dictionary of strategy evaluations
-        """
-        evaluations = {}
-        
-        # List all evaluation files
-        eval_files = [f for f in os.listdir(self.data_dir) if f.endswith("_evaluation.json")]
-        
-        # Sort by modification time (most recent first)
-        eval_files.sort(key=lambda f: os.path.getmtime(os.path.join(self.data_dir, f)), reverse=True)
-        
-        # Load the most recent evaluations
-        for filename in eval_files[:max_count]:
-            try:
-                with open(os.path.join(self.data_dir, filename), 'r') as f:
-                    eval_data = json.load(f)
-                    strategy_id = eval_data.get("strategy_id")
-                    if strategy_id:
-                        evaluations[strategy_id] = eval_data
-            except Exception as e:
-                logger.error(f"Error loading evaluation file {filename}: {e}")
-        
-        return evaluations
-    
-    def get_trend_analysis(self, lookback_days: int = 30) -> Dict:
-        """
-        Analyze trends in strategy performance over time.
-        
-        Args:
-            lookback_days: Number of days to look back
-            
-        Returns:
-            Dictionary with trend analysis
-        """
-        # Get cutoff date
-        cutoff_date = datetime.now() - timedelta(days=lookback_days)
-        
-        # Load all evaluation files
-        eval_files = [f for f in os.listdir(self.data_dir) if f.endswith("_evaluation.json")]
-        
-        # Filter and load evaluations within the lookback period
-        trend_data = []
-        for filename in eval_files:
-            try:
-                file_path = os.path.join(self.data_dir, filename)
-                file_mtime = datetime.fromtimestamp(os.path.getmtime(file_path))
-                
-                if file_mtime >= cutoff_date:
-                    with open(file_path, 'r') as f:
-                        eval_data = json.load(f)
-                        
-                        # Extract key metrics and timestamp
-                        timestamp = eval_data.get("timestamp", str(file_mtime))
-                        if isinstance(timestamp, str):
-                            timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                        
-                        metrics = eval_data.get("metrics", {})
-                        
-                        trend_entry = {
-                            "strategy_id": eval_data.get("strategy_id"),
-                            "timestamp": timestamp,
-                            "sharpe_ratio": metrics.get("sharpe_ratio", 0),
-                            "win_rate": metrics.get("win_rate", 0),
-                            "max_drawdown": metrics.get("max_drawdown", 0),
-                            "profit_factor": metrics.get("profit_factor", 0),
-                            "score": eval_data.get("score", 0)
-                        }
-                        
-                        trend_data.append(trend_entry)
-            except Exception as e:
-                logger.error(f"Error processing evaluation file {filename}: {e}")
-        
-        # Sort by timestamp
-        trend_data.sort(key=lambda x: x["timestamp"])
-        
-        # Calculate trends
-        trend_analysis = {
-            "lookback_days": lookback_days,
-            "evaluation_count": len(trend_data),
-            "earliest_date": trend_data[0]["timestamp"] if trend_data else None,
-            "latest_date": trend_data[-1]["timestamp"] if trend_data else None,
-            "metrics_trends": {},
-            "top_strategies": {}
-        }
-        
-        # Analyze trends for each metric
-        metrics_to_analyze = ["sharpe_ratio", "win_rate", "max_drawdown", "profit_factor", "score"]
-        
-        for metric in metrics_to_analyze:
-            values = [entry[metric] for entry in trend_data]
-            
-            if values:
-                avg = sum(values) / len(values)
-                median = sorted(values)[len(values) // 2]
-                min_val = min(values)
-                max_val = max(values)
-                
-                # Calculate trend (positive or negative)
-                if len(values) >= 2:
-                    first_half = values[:len(values)//2]
-                    second_half = values[len(values)//2:]
-                    
-                    first_half_avg = sum(first_half) / len(first_half)
-                    second_half_avg = sum(second_half) / len(second_half)
-                    
-                    trend_direction = "up" if second_half_avg > first_half_avg else "down"
-                    trend_strength = abs(second_half_avg - first_half_avg) / avg if avg else 0
-                else:
-                    trend_direction = "neutral"
-                    trend_strength = 0
-                
-                trend_analysis["metrics_trends"][metric] = {
-                    "average": avg,
-                    "median": median,
-                    "min": min_val,
-                    "max": max_val,
-                    "trend_direction": trend_direction,
-                    "trend_strength": trend_strength
-                }
-        
-        # Find top strategies by different metrics
-        for metric in metrics_to_analyze:
-            if metric == "max_drawdown":
-                # Lower is better for drawdown
-                sorted_entries = sorted(trend_data, key=lambda x: x[metric])
-            else:
-                # Higher is better for other metrics
-                sorted_entries = sorted(trend_data, key=lambda x: x[metric], reverse=True)
-            
-            top_strategies = []
-            for entry in sorted_entries[:3]:  # Get top 3
-                top_strategies.append({
-                    "strategy_id": entry["strategy_id"],
-                    "value": entry[metric],
-                    "timestamp": entry["timestamp"]
-                })
-            
-            trend_analysis["top_strategies"][metric] = top_strategies
-        
-        return trend_analysis
+        logger.info("Basic strategy comparison charts saved to reports/ directory")

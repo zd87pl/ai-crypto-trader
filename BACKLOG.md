@@ -81,7 +81,7 @@
 - [x] **STRAT-05**: Add strategy performance tracking
 - [ ] **STRAT-06**: Implement automated strategy selection
 - [ ] **STRAT-07**: Add social sentiment to strategy evolution
-- [ ] **STRAT-08**: Create strategy performance comparison framework
+- [x] **STRAT-08**: Create strategy performance comparison framework
 - [ ] **STRAT-09**: Implement market regime-specific strategy selection
 - [ ] **STRAT-10**: Add systematic evaluation of AI-generated strategies
 
