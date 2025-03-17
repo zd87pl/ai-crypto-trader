@@ -19,7 +19,7 @@
 - [x] **ML-02**: Add reinforcement learning capabilities
 - [x] **ML-03**: Create feature importance analysis for model inputs
 - [x] **ML-04**: Develop market regime detection (trending/ranging/volatile)
-- [ ] **ML-05**: Implement neural network models for price prediction
+- [x] **ML-05**: Implement neural network models for price prediction
 
 ### Monitoring & Observability
 - [ ] **MON-01**: Implement Prometheus metrics for each service

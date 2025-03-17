@@ -13,6 +13,7 @@ from services.social_strategy_integrator import SocialStrategyIntegrator
 from services.feature_importance_analyzer import FeatureImportanceAnalyzer
 from services.social_risk_adjuster import SocialRiskAdjuster
 from services.monte_carlo_service import MonteCarloService
+from services.neural_network_service import NeuralNetworkService
 
 def setup_logging():
     """Setup logging configuration"""
@@ -247,6 +248,64 @@ def print_status(trader, strategy_selector=None):
                             print(f"- {symbol}: Return {expected_return}, VaR {var}, Prob. Profit {prob_profit}")
     except Exception as e:
         pass  # Silently ignore any errors here
+        
+    # Print neural network price predictions
+    try:
+        symbols = ["BTCUSDC", "ETHUSDC", "BNBUSDC"]  # Default symbols to check
+        intervals = ["1h", "4h", "24h"]  # Default prediction intervals
+        
+        print("\nNeural Network Price Predictions:")
+        print("-" * 80)
+        print(f"{'Symbol':<10} {'Interval':<8} {'Current':<10} {'Predicted':<10} {'Change':<10} {'Confidence':<10}")
+        print("-" * 80)
+        
+        predictions_found = False
+        
+        for symbol in symbols:
+            for interval in intervals:
+                prediction_key = f'nn_prediction_{symbol}_{interval}'
+                prediction_json = trader.redis.get(prediction_key)
+                
+                if not prediction_json:
+                    continue
+                
+                prediction = json.loads(prediction_json)
+                
+                if prediction.get('status') != 'success':
+                    continue
+                    
+                predictions_found = True
+                current_price = prediction.get('current_price', 0)
+                predicted_price = prediction.get('predicted_price', 0)
+                change_pct = prediction.get('change_pct', 0)
+                confidence = prediction.get('confidence', 0)
+                
+                # Format the prediction time
+                prediction_time = prediction.get('prediction_time', '')
+                if prediction_time:
+                    try:
+                        dt = datetime.fromisoformat(prediction_time)
+                        time_str = dt.strftime("%H:%M %m/%d")
+                    except:
+                        time_str = prediction_time
+                else:
+                    time_str = 'N/A'
+                
+                # Add emoji based on direction
+                direction_emoji = "🟢" if change_pct > 0 else "🔴"
+                
+                print(f"{symbol:<10} "
+                     f"{interval:<8} "
+                     f"${current_price:<9.4f} "
+                     f"${predicted_price:<9.4f} "
+                     f"{direction_emoji} {abs(change_pct):<7.2f}% "
+                     f"{confidence*100:<9.1f}%")
+        
+        if not predictions_found:
+            print("No predictions available yet")
+    
+    except Exception as e:
+        pass  # Silently ignore any errors here
 
 async def run_strategy_selection_service():
     """Run the strategy selection service"""
@@ -276,6 +335,11 @@ async def run_social_risk_adjuster_service():
 async def run_monte_carlo_service():
     """Run the Monte Carlo simulation service"""
     service = MonteCarloService()
+    await service.run()
+    
+async def run_neural_network_service():
+    """Run the neural network price prediction service"""
+    service = NeuralNetworkService()
     await service.run()
 
 def run_async_service(async_func):
@@ -347,6 +411,15 @@ def main():
         )
         monte_carlo_thread.start()
         logging.info("Monte Carlo simulation service started")
+        
+        # Start Neural Network price prediction service in a separate thread
+        neural_network_thread = threading.Thread(
+            target=run_async_service,
+            args=(run_neural_network_service,),
+            daemon=True
+        )
+        neural_network_thread.start()
+        logging.info("Neural Network price prediction service started")
         
         # Small delay to allow services to initialize
         time.sleep(3)

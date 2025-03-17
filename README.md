@@ -202,6 +202,18 @@ python dashboard.py
 - Produces comprehensive risk reports for the entire portfolio
 - Logs to: `logs/monte_carlo.log`
 
+### 16. Neural Network Price Prediction Service
+- Implements deep learning models for cryptocurrency price prediction
+- Supports multiple neural network architectures (LSTM, GRU, Bidirectional LSTM, CNN-LSTM, Attention)
+- Enables ensemble models combining multiple architectures for improved predictions
+- Generates predictions for multiple timeframes (1h, 4h, 24h)
+- Provides prediction confidence scores and directional indicators
+- Features automatic training and model tuning capabilities
+- Creates visualizations for both predictions and training performance
+- Supports real-time model evaluation and adaptation
+- Integrates with trading strategies for signal optimization
+- Logs to: `logs/neural_network.log`
+
 ## Environment Setup
 
 1. Create a `.env` file with the following credentials:
@@ -297,6 +309,9 @@ python services/social_risk_adjuster.py
 
 # Start the Monte Carlo simulation service
 python services/monte_carlo_service.py
+
+# Start the Neural Network price prediction service
+python services/neural_network_service.py
 
 # Start the dashboard
 python dashboard.py
@@ -466,6 +481,34 @@ For more detailed instructions, see `backtesting/README.md`.
     },
     "timestamp": "2024-11-24T15:45:22.134Z",
     "data_end": "2024-11-24T15:45:00.000Z"
+}
+```
+
+### Neural Network Price Prediction
+```json
+{
+    "symbol": "BTCUSDC",
+    "interval": "4h",
+    "current_price": 42150.75,
+    "predicted_price": 42950.25,
+    "change_pct": 1.89,
+    "prediction_time": "2024-11-24T21:33:45.029Z",
+    "reference_time": "2024-11-24T17:33:45.029Z",
+    "confidence": 0.75,
+    "model_type": "lstm",
+    "status": "success",
+    "training_metrics": {
+        "val_loss": 0.0023,
+        "val_mae": 0.0374,
+        "epochs_trained": 87
+    },
+    "features_used": [
+        "close", 
+        "volume", 
+        "rsi", 
+        "macd", 
+        "bb_position"
+    ]
 }
 ```
 

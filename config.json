@@ -329,5 +329,64 @@
         "primary_symbol": "BTCUSDC",
         "primary_timeframe": "1h",
         "service_port": 8005
+    },
+    "neural_network": {
+        "enabled": true,
+        "model_type": "lstm",
+        "ensemble_enabled": false,
+        "prediction_intervals": ["1h", "4h", "24h"],
+        "symbols": ["BTCUSDC", "ETHUSDC", "BNBUSDC"],
+        "training_lookback_days": 60,
+        "sequence_length": 60,
+        "batch_size": 32,
+        "epochs": 100,
+        "learning_rate": 0.001,
+        "dropout_rate": 0.2,
+        "model_checkpoint_interval": 86400,
+        "features": [
+            "close", 
+            "volume", 
+            "rsi", 
+            "macd", 
+            "bb_position", 
+            "stoch_k", 
+            "williams_r", 
+            "ema_12", 
+            "ema_26"
+        ],
+        "loss_function": "mean_squared_error",
+        "optimizer": "adam",
+        "prediction_confidence_threshold": 0.6,
+        "service_port": 8010,
+        "visualization_enabled": true,
+        "model_architectures": {
+            "lstm": {
+                "layers": [64, 32],
+                "units_per_layer": [64, 32]
+            },
+            "gru": {
+                "layers": [64, 32],
+                "units_per_layer": [64, 32]
+            },
+            "bidirectional": {
+                "layers": [64, 32],
+                "units_per_layer": [64, 32]
+            },
+            "cnn_lstm": {
+                "cnn_filters": [64, 32],
+                "lstm_units": 32
+            },
+            "attention": {
+                "num_heads": 2,
+                "key_dim": 32,
+                "lstm_units": 64
+            }
+        },
+        "integration": {
+            "strategy_weight": 0.6,
+            "risk_assessment_weight": 0.4,
+            "combine_with_other_signals": true,
+            "trigger_alerts": true
+        }
     }
 }
