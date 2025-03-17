@@ -11,6 +11,7 @@ from services.strategy_selection_service import StrategySelectionService
 from services.market_regime_service import MarketRegimeService
 from services.social_strategy_integrator import SocialStrategyIntegrator
 from services.feature_importance_service import FeatureImportanceService
+from services.social_risk_adjuster import SocialRiskAdjuster
 
 def setup_logging():
     """Setup logging configuration"""
@@ -150,6 +151,34 @@ def print_status(trader, strategy_selector=None):
                         print(f"- {group}: {data['classification']:.4f}")
     except Exception as e:
         pass  # Silently ignore any errors here
+        
+    # Print social risk adjustment information if available
+    try:
+        social_risk_report = trader.redis.get('social_risk_report')
+        if social_risk_report:
+            risk_data = json.loads(social_risk_report)
+            
+            # Only print if the data is recent (less than 10 minutes old)
+            report_time = datetime.fromisoformat(risk_data['timestamp'])
+            if datetime.now() - report_time < timedelta(minutes=10):
+                print("\nSocial Risk Adjustments:")
+                print("-" * 80)
+                print(f"Active Adjustments: {risk_data.get('active_adjustments', 0)}")
+                
+                # Print a summary of the active adjustments
+                if 'adjustments' in risk_data and risk_data['adjustments']:
+                    print("\nActive Risk Adjustments by Symbol:")
+                    for symbol, adj in risk_data['adjustments'].items():
+                        sentiment_type = adj.get('sentiment_type', 'NEUTRAL')
+                        sentiment_score = adj.get('sentiment_score', 0.5)
+                        pos_adj = adj.get('position_size_adj', 0) * 100
+                        sl_adj = adj.get('stop_loss_adj', 0) * 100
+                        tp_adj = adj.get('take_profit_adj', 0) * 100
+                        
+                        print(f"- {symbol}: {sentiment_type} (Score: {sentiment_score:.2f}) | " +
+                              f"Pos: {pos_adj:+.1f}%, SL: {sl_adj:+.1f}%, TP: {tp_adj:+.1f}%")
+    except Exception as e:
+        pass  # Silently ignore any errors here
 
 async def run_strategy_selection_service():
     """Run the strategy selection service"""
@@ -169,6 +198,11 @@ async def run_social_strategy_service():
 async def run_feature_importance_service():
     """Run the feature importance analysis service"""
     service = FeatureImportanceService()
+    await service.run()
+    
+async def run_social_risk_adjuster_service():
+    """Run the social risk adjuster service"""
+    service = SocialRiskAdjuster()
     await service.run()
 
 def run_async_service(async_func):
@@ -222,6 +256,15 @@ def main():
         )
         feature_importance_thread.start()
         logging.info("Feature importance analysis service started")
+        
+        # Start social risk adjuster service in a separate thread
+        social_risk_thread = threading.Thread(
+            target=run_async_service,
+            args=(run_social_risk_adjuster_service,),
+            daemon=True
+        )
+        social_risk_thread.start()
+        logging.info("Social risk adjuster service started")
         
         # Small delay to allow services to initialize
         time.sleep(3)

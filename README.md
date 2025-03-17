@@ -165,6 +165,16 @@ python dashboard.py
 - Monitors asset correlations for improved diversification
 - Logs to: `logs/portfolio_risk.log`
 
+### 14. Social Risk Adjuster Service
+- Dynamically adjusts risk parameters based on social sentiment
+- Modifies position sizes, stop-losses, and take-profit levels
+- Applies time decay to social sentiment influence
+- Adjusts correlation thresholds based on social metrics
+- Detects volatility patterns in social engagement
+- Applies different adjustment strategies for bullish/bearish sentiment
+- Includes data quality assessment for reliable adjustments
+- Logs to: `logs/social_risk_adjuster.log`
+
 ## Environment Setup
 
 1. Create a `.env` file with the following credentials:
@@ -187,6 +197,7 @@ STRATEGY_EVOLUTION_PORT=8004
 SOCIAL_MONITOR_PORT=8005
 MODEL_REGISTRY_PORT=8006
 AI_EXPLAINABILITY_PORT=8007
+SOCIAL_RISK_PORT=8008
 
 # Redis configuration
 REDIS_HOST=redis
@@ -249,6 +260,12 @@ python run_ai_model_services.py --model-registry
 
 # Start the AI explainability service
 python run_ai_model_services.py --explainability
+
+# Start the feature importance service
+python services/feature_importance_service.py
+
+# Start the social risk adjuster service
+python services/social_risk_adjuster.py
 
 # Start the dashboard
 python dashboard.py
@@ -334,6 +351,22 @@ For more detailed instructions, see `backtesting/README.md`.
         ],
         "timestamp": "2024-11-24T21:33:45.029Z"
     }
+}
+```
+
+### Social Risk Adjustment
+```json
+{
+    "symbol": "BTCUSDC",
+    "sentiment_score": 0.75,
+    "sentiment_type": "BULLISH",
+    "position_size_adj": 0.15,
+    "stop_loss_adj": -0.1,
+    "take_profit_adj": 0.2,
+    "correlation_threshold_adj": 0.1,
+    "volatility_adj": 0.08,
+    "timestamp": "2024-11-24T21:33:45.029Z",
+    "confidence": 0.85
 }
 ```
 

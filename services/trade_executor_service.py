@@ -796,6 +796,23 @@ class TradeExecutorService:
         precision = len(str(tick_size).split('.')[-1])
         return round(price - (price % tick_size), precision)
 
+    async def get_social_risk_adjustment(self, symbol):
+        """Get social risk adjustment for a symbol"""
+        try:
+            if not self.redis or not await self.redis.ping():
+                if not await self.connect_redis():
+                    return None
+            
+            # Get adjustment from Redis
+            adjustment_json = await self.redis.hget('social_risk_adjustments', symbol)
+            if adjustment_json:
+                return json.loads(adjustment_json)
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting social risk adjustment for {symbol}: {str(e)}")
+            return None
+    
     async def execute_trade(self, signal: dict):
         """Execute a trade based on the trading signal"""
         try:
@@ -828,12 +845,31 @@ class TradeExecutorService:
                 current_price = float(ticker['price'])
                 logger.debug(f"Current price for {symbol}: ${current_price:.8f}")
 
+                # Get social sentiment-based risk adjustment (RISK-07)
+                social_risk_adjustment = await self.get_social_risk_adjustment(symbol)
+                
                 # Check for risk information in the signal
                 risk_info = signal.get('risk_info', {})
                 
                 # Calculate position size using risk-based approach if available
                 default_position_pct = self.config['trading_params']['position_size']
                 optimal_position_pct = risk_info.get('optimal_position_pct', default_position_pct)
+                
+                # Apply social sentiment-based position size adjustment if available
+                if social_risk_adjustment:
+                    logger.info(f"Applying social sentiment-based risk adjustment for {symbol}")
+                    sentiment_type = social_risk_adjustment.get('sentiment_type', 'NEUTRAL')
+                    position_adj = social_risk_adjustment.get('position_size_adj', 0)
+                    
+                    # Apply adjustment
+                    adjusted_position_pct = optimal_position_pct * (1 + position_adj)
+                    
+                    # Log adjustment details
+                    logger.info(f"Social sentiment: {sentiment_type} - Position size adjustment: {position_adj:+.2%}")
+                    logger.info(f"Original position size: {optimal_position_pct:.2%} → Adjusted: {adjusted_position_pct:.2%}")
+                    
+                    # Use adjusted position size
+                    optimal_position_pct = adjusted_position_pct
                 
                 # Apply position size
                 position_size = min(
@@ -882,28 +918,60 @@ class TradeExecutorService:
                 filled_quantity = float(order['executedQty'])
                 logger.info(f"Market buy order filled at ${fill_price:.8f}")
 
+                # Default stop loss percentage from config
+                stop_loss_pct = self.config['trading_params']['stop_loss_pct']
+                
                 # Use adaptive stop-loss if available, otherwise use default
                 if 'adaptive_stop_loss' in risk_info:
                     adaptive_stop_price = risk_info['adaptive_stop_loss']
-                    adaptive_stop_pct = risk_info.get('adaptive_stop_pct', 
-                                                     self.config['trading_params']['stop_loss_pct'])
+                    adaptive_stop_pct = risk_info.get('adaptive_stop_pct', stop_loss_pct)
                     
-                    logger.info(f"Using adaptive stop-loss: {adaptive_stop_pct:.2f}% (default: {self.config['trading_params']['stop_loss_pct']:.2f}%)")
+                    logger.info(f"Using adaptive stop-loss: {adaptive_stop_pct:.2f}% (default: {stop_loss_pct:.2f}%)")
                     
                     stop_loss_price = self.round_price(
                         adaptive_stop_price,
                         rules['tick_size']
                     )
+                    
+                    # Update stop_loss_pct for social adjustment
+                    stop_loss_pct = adaptive_stop_pct
                 else:
-                    # Fall back to default stop-loss
-                    stop_loss_price = self.round_price(
-                        fill_price * (1 - self.config['trading_params']['stop_loss_pct'] / 100),
-                        rules['tick_size']
-                    )
+                    # Calculate default stop-loss price
+                    stop_loss_price = fill_price * (1 - stop_loss_pct / 100)
+                
+                # Default take profit percentage from config
+                take_profit_pct = self.config['trading_params']['take_profit_pct']
+                
+                # Apply social sentiment-based stop loss and take profit adjustments
+                if social_risk_adjustment:
+                    # Get adjustments
+                    stop_loss_adj = social_risk_adjustment.get('stop_loss_adj', 0)
+                    take_profit_adj = social_risk_adjustment.get('take_profit_adj', 0)
+                    
+                    # Apply stop loss adjustment
+                    adjusted_stop_loss_pct = stop_loss_pct * (1 + stop_loss_adj)
+                    
+                    # Apply take profit adjustment
+                    adjusted_take_profit_pct = take_profit_pct * (1 + take_profit_adj)
+                    
+                    # Log adjustments
+                    logger.info(f"Stop loss: {stop_loss_pct:.2f}% → {adjusted_stop_loss_pct:.2f}% (adj: {stop_loss_adj:+.2%})")
+                    logger.info(f"Take profit: {take_profit_pct:.2f}% → {adjusted_take_profit_pct:.2f}% (adj: {take_profit_adj:+.2%})")
+                    
+                    # Use adjusted percentages
+                    stop_loss_pct = adjusted_stop_loss_pct
+                    take_profit_pct = adjusted_take_profit_pct
+                    
+                    # Calculate adjusted stop loss price only if not using adaptive stop loss
+                    if 'adaptive_stop_loss' not in risk_info:
+                        stop_loss_price = fill_price * (1 - stop_loss_pct / 100)
+                
+                # Round stop loss price
+                stop_loss_price = self.round_price(stop_loss_price, rules['tick_size'])
                 
                 # Calculate and round take profit price
                 take_profit_price = self.round_price(
-                    fill_price * (1 + self.config['trading_params']['take_profit_pct'] / 100),
+                    fill_price * (1 + take_profit_pct / 100),
                     rules['tick_size']
                 )
 
@@ -930,7 +998,7 @@ class TradeExecutorService:
                     price=take_profit_price
                 )
 
-                # Record trade
+                # Record trade with social sentiment information
                 self.active_trades[symbol] = {
                     'entry_price': fill_price,
                     'quantity': filled_quantity,
@@ -941,7 +1009,9 @@ class TradeExecutorService:
                     'entry_time': datetime.now().isoformat(),
                     'status': 'ACTIVE',
                     'trailing_stop_active': False,
-                    'highest_price': fill_price
+                    'highest_price': fill_price,
+                    'social_sentiment': social_risk_adjustment.get('sentiment_type', 'NEUTRAL') if social_risk_adjustment else 'NEUTRAL',
+                    'social_score': social_risk_adjustment.get('sentiment_score', 0.5) if social_risk_adjustment else 0.5
                 }
                 
                 # Register trailing stop if enabled

@@ -54,6 +54,33 @@
                     "min_adjustment_pct": 0.2
                 }
             }
+        },
+        "social_risk_adjustment": {
+            "enabled": true,
+            "position_size_impact": 0.3,
+            "stop_loss_impact": 0.2,
+            "take_profit_impact": 0.4,
+            "correlation_impact": 0.25,
+            "sentiment_weights": {
+                "twitter_sentiment": 0.35,
+                "reddit_sentiment": 0.30,
+                "news_sentiment": 0.25,
+                "overall_sentiment": 0.10
+            },
+            "risk_factor_weights": {
+                "sentiment_score": 0.45,
+                "social_volume": 0.20,
+                "social_engagement": 0.25,
+                "social_contributors": 0.10
+            },
+            "volatility_modifier": 0.15,
+            "news_impact_factor": 0.35,
+            "sentiment_half_life": 6,
+            "min_data_quality": 0.5,
+            "bullish_threshold": 0.65,
+            "bearish_threshold": 0.35,
+            "max_adjustment_percent": 0.5,
+            "update_interval_seconds": 60
         }
     },
     "openai": {
