@@ -81,6 +81,32 @@
             "bearish_threshold": 0.35,
             "max_adjustment_percent": 0.5,
             "update_interval_seconds": 60
+        },
+        "monte_carlo": {
+            "enabled": true,
+            "num_simulations": 1000,
+            "time_horizon_days": 30,
+            "confidence_level": 0.95,
+            "lookback_days": 60,
+            "return_method": "log",
+            "simulation_method": "geometric_brownian_motion",
+            "plot_chart": true,
+            "generate_reports": true,
+            "report_frequency": "daily",
+            "store_all_paths": false,
+            "scenarios": {
+                "base": {},
+                "bull": {"drift_factor": 1.5, "volatility_factor": 0.8},
+                "bear": {"drift_factor": 0.5, "volatility_factor": 1.2},
+                "volatile": {"drift_factor": 1.0, "volatility_factor": 2.0},
+                "crab": {"drift_factor": 0.2, "volatility_factor": 0.5}
+            },
+            "position_sizing_impact": true,
+            "risk_assessment_thresholds": {
+                "high_risk_var": 15.0,
+                "medium_risk_var": 10.0,
+                "low_risk_var": 5.0
+            }
         }
     },
     "openai": {

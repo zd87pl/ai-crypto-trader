@@ -175,6 +175,17 @@ python dashboard.py
 - Includes data quality assessment for reliable adjustments
 - Logs to: `logs/social_risk_adjuster.log`
 
+### 15. Monte Carlo Simulation Service
+- Generates thousands of price path simulations for future risk projection
+- Implements multiple simulation methods (geometric Brownian motion, historical)
+- Calculates Value at Risk (VaR) and Conditional VaR metrics
+- Scenarios analysis for different market conditions (bull, bear, volatile, etc.)
+- Creates probability distributions for future price movements
+- Analyzes maximum drawdown scenarios
+- Generates visual representations of price path simulations
+- Produces comprehensive risk reports for the entire portfolio
+- Logs to: `logs/monte_carlo.log`
+
 ## Environment Setup
 
 1. Create a `.env` file with the following credentials:
@@ -198,6 +209,7 @@ SOCIAL_MONITOR_PORT=8005
 MODEL_REGISTRY_PORT=8006
 AI_EXPLAINABILITY_PORT=8007
 SOCIAL_RISK_PORT=8008
+MONTE_CARLO_PORT=8009
 
 # Redis configuration
 REDIS_HOST=redis
@@ -266,6 +278,9 @@ python services/feature_importance_service.py
 
 # Start the social risk adjuster service
 python services/social_risk_adjuster.py
+
+# Start the Monte Carlo simulation service
+python services/monte_carlo_service.py
 
 # Start the dashboard
 python dashboard.py

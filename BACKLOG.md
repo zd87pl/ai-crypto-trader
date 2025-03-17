@@ -92,10 +92,10 @@
 - [x] **RISK-04**: Add maximum drawdown protection
 - [x] **RISK-05**: Implement correlation-based position limits
 - [x] **RISK-06**: Add AI-driven risk assessment with social metrics
-- [ ] **RISK-07**: Implement social sentiment-based risk adjustments
+- [x] **RISK-07**: Implement social sentiment-based risk adjustments
 - [x] **RISK-08**: Add portfolio-wide Value at Risk (VaR) calculations
 - [x] **RISK-09**: Implement adaptive stop-losses based on market volatility
-- [ ] **RISK-10**: Add Monte Carlo simulations for risk projection
+- [x] **RISK-10**: Add Monte Carlo simulations for risk projection
 
 ### Analysis Improvements
 - [x] **ANAL-01**: Implement social metrics integration

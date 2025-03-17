@@ -12,6 +12,7 @@ from services.market_regime_service import MarketRegimeService
 from services.social_strategy_integrator import SocialStrategyIntegrator
 from services.feature_importance_service import FeatureImportanceService
 from services.social_risk_adjuster import SocialRiskAdjuster
+from services.monte_carlo_service import MonteCarloService
 
 def setup_logging():
     """Setup logging configuration"""
@@ -179,6 +180,48 @@ def print_status(trader, strategy_selector=None):
                               f"Pos: {pos_adj:+.1f}%, SL: {sl_adj:+.1f}%, TP: {tp_adj:+.1f}%")
     except Exception as e:
         pass  # Silently ignore any errors here
+        
+    # Print Monte Carlo simulation results if available
+    try:
+        monte_carlo_report = trader.redis.get('monte_carlo_latest_report')
+        if monte_carlo_report:
+            report_data = json.loads(monte_carlo_report)
+            
+            # Only print if the data is recent (less than 1 day old)
+            if 'timestamp' in report_data:
+                report_time = datetime.fromisoformat(report_data['timestamp'])
+                if datetime.now() - report_time < timedelta(days=1):
+                    print("\nMonte Carlo Risk Projection:")
+                    print("-" * 80)
+                    
+                    # Portfolio value and projections
+                    print(f"Current Portfolio Value: ${report_data.get('portfolio_value', 0):.2f}")
+                    print(f"Expected Value (30 days): {report_data.get('expected_change', '0.00%')}")
+                    
+                    # Value at Risk
+                    var_section = report_data.get('value_at_risk', {})
+                    print(f"Value at Risk (95%): {var_section.get('var_percent', '0.00%')} (${var_section.get('var_amount', '$0.00')})")
+                    
+                    # Scenario analysis 
+                    if 'scenario_analysis' in report_data and report_data['scenario_analysis']:
+                        print("\nScenario Analysis:")
+                        scenarios = report_data['scenario_analysis']
+                        for scenario, data in scenarios.items():
+                            expected_return = data.get('expected_return', '0.00%')
+                            var = data.get('var', '0.00%')
+                            print(f"- {scenario.capitalize()}: Return {expected_return}, VaR {var}")
+                    
+                    # Individual asset analysis
+                    if 'asset_analysis' in report_data and report_data['asset_analysis']:
+                        print("\nAsset Risk Analysis:")
+                        asset_data = report_data['asset_analysis']
+                        for symbol, data in asset_data.items():
+                            expected_return = data.get('expected_return', '0.00%')
+                            var = data.get('var', '0.00%')
+                            prob_profit = data.get('prob_profit', '0.0%')
+                            print(f"- {symbol}: Return {expected_return}, VaR {var}, Prob. Profit {prob_profit}")
+    except Exception as e:
+        pass  # Silently ignore any errors here
 
 async def run_strategy_selection_service():
     """Run the strategy selection service"""
@@ -203,6 +246,11 @@ async def run_feature_importance_service():
 async def run_social_risk_adjuster_service():
     """Run the social risk adjuster service"""
     service = SocialRiskAdjuster()
+    await service.run()
+    
+async def run_monte_carlo_service():
+    """Run the Monte Carlo simulation service"""
+    service = MonteCarloService()
     await service.run()
 
 def run_async_service(async_func):
@@ -265,6 +313,15 @@ def main():
         )
         social_risk_thread.start()
         logging.info("Social risk adjuster service started")
+        
+        # Start Monte Carlo simulation service in a separate thread
+        monte_carlo_thread = threading.Thread(
+            target=run_async_service,
+            args=(run_monte_carlo_service,),
+            daemon=True
+        )
+        monte_carlo_thread.start()
+        logging.info("Monte Carlo simulation service started")
         
         # Small delay to allow services to initialize
         time.sleep(3)
