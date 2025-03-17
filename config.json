@@ -742,5 +742,104 @@
                 "upper_boundary_pct": 6.0
             }
         ]
+    },
+    "dca_strategy": {
+        "enabled": true,
+        "simulation_mode": true,
+        "service_port": 8015,
+        "update_interval": 60,
+        "symbols": ["BTCUSDC", "ETHUSDC", "BNBUSDC"],
+        "schedule_type": "fixed",
+        "interval_hours": 24,
+        "total_investment_period_months": 12,
+        "total_allocation": 0.3,
+        "base_order_size_usdc": 100,
+        "auto_adjust_order_size": true,
+        "min_order_size_usdc": 20,
+        "max_order_size_usdc": 500,
+        "volatility_adjustment_enabled": true,
+        "sentiment_adjustment_enabled": true,
+        "max_sentiment_impact": 0.3,
+        "price_dip_detection": true,
+        "dip_threshold_pct": 5.0,
+        "additional_dip_allocation": 0.5,
+        "max_dip_frequency_days": 7,
+        "take_profit_enabled": false,
+        "take_profit_pct": 20.0,
+        "stop_loss_enabled": false,
+        "stop_loss_pct": 30.0,
+        "weekly_dca_day": 1,
+        "monthly_dca_day": 1,
+        "adaptive_scheduling": true,
+        "scheduling_strategies": {
+            "fixed": {},
+            "market_regime_based": {
+                "bull_interval_hours": 48,
+                "bear_interval_hours": 12,
+                "crab_interval_hours": 24,
+                "volatile_interval_hours": 6
+            },
+            "value_averaging": {
+                "enabled": true,
+                "target_value_increase_pct": 5.0
+            },
+            "weighted_scheduling": {
+                "enabled": true,
+                "weight_factors": {
+                    "day_of_week": 0.3,
+                    "market_volatility": 0.4,
+                    "social_sentiment": 0.3
+                }
+            }
+        },
+        "notify_on_purchase": true,
+        "symbol_settings": [
+            {
+                "symbol": "BTCUSDC",
+                "allocation": 0.6,
+                "interval_hours": 24,
+                "base_order_size_usdc": 150
+            },
+            {
+                "symbol": "ETHUSDC",
+                "allocation": 0.3,
+                "interval_hours": 48,
+                "base_order_size_usdc": 80
+            },
+            {
+                "symbol": "BNBUSDC",
+                "allocation": 0.1,
+                "interval_hours": 72,
+                "base_order_size_usdc": 50
+            }
+        ],
+        "periodic_rebalancing": {
+            "enabled": true,
+            "rebalance_interval_days": 30,
+            "max_deviation_pct": 5.0
+        },
+        "market_condition_rules": {
+            "skip_in_extreme_volatility": true,
+            "extreme_volatility_threshold": 4.0,
+            "increase_in_bear_market": true,
+            "bear_market_adjustment": 1.5,
+            "bear_market_threshold": -20.0,
+            "reduce_in_extreme_greed": true,
+            "extreme_greed_threshold": 80
+        },
+        "reporting": {
+            "track_performance": true,
+            "performance_metrics": [
+                "total_invested",
+                "average_price",
+                "current_value",
+                "total_return",
+                "return_percentage"
+            ],
+            "detail_level": "high",
+            "include_charts": true,
+            "daily_summary": true,
+            "benchmark_index": "BTCUSDC"
+        }
     }
 }

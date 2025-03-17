@@ -19,6 +19,7 @@ from services.news_analysis_service import NewsAnalysisService
 from services.enhanced_social_monitor_service import EnhancedSocialMonitorService
 from services.order_book_analysis_service import OrderBookAnalysisService
 from services.grid_trading_strategy import GridTradingStrategy
+from services.dca_strategy import DCAStrategy
 
 def setup_logging():
     """Setup logging configuration"""
@@ -982,6 +983,142 @@ def print_status(trader, strategy_selector=None):
                     
         if not grid_info_shown and not performance_json:
             print("No grid trading data available yet")
+            
+    # Print DCA strategy information
+    try:
+        print("\nDCA Strategy Status:")
+        print("-" * 80)
+        
+        # Get DCA strategy status
+        status_json = trader.redis.get('dca_strategy_status')
+        
+        if status_json:
+            status = json.loads(status_json)
+            
+            # Print status information
+            status_str = status.get('status', 'unknown')
+            sim_mode = status.get('simulation_mode', True)
+            
+            print(f"Status: {status_str.upper()} | {'SIMULATION MODE' if sim_mode else 'LIVE TRADING'}")
+            
+            if 'symbols' in status:
+                print(f"Active symbols: {', '.join(status['symbols'])}")
+                
+            # Check for error information
+            if 'error' in status:
+                print(f"Error: {status['error']}")
+        
+        # Get DCA performance data
+        performance_json = trader.redis.get('dca_performance')
+        
+        if performance_json:
+            performance = json.loads(performance_json)
+            
+            # Print performance summary
+            total_purchases = performance.get('total_purchases', 0)
+            total_invested = performance.get('total_invested', 0)
+            total_value = performance.get('total_value', 0)
+            total_profit = performance.get('total_profit', 0)
+            total_profit_pct = performance.get('total_profit_pct', 0)
+            running_time = performance.get('running_time_hours', 0)
+            
+            if total_purchases > 0:
+                print(f"\nDCA Performance (after {running_time:.1f} hours):")
+                print(f"Total purchases: {total_purchases} | Total invested: ${total_invested:.2f}")
+                print(f"Current value: ${total_value:.2f} | Profit/Loss: ${total_profit:.2f} ({total_profit_pct:.2f}%)")
+                
+                # Show position summary
+                if 'avg_costs' in performance and performance['avg_costs']:
+                    print("\nDCA Positions:")
+                    print(f"{'Symbol':<10} {'Avg. Price':<12} {'Current':<12} {'Quantity':<10} {'P/L %':<10}")
+                    print("-" * 80)
+                    
+                    for symbol, data in sorted(performance['avg_costs'].items(), 
+                                           key=lambda x: abs(x[1].get('profit_loss_pct', 0)), 
+                                           reverse=True):
+                        avg_price = data.get('average_price', 0)
+                        current_price = data.get('current_price', 0)
+                        quantity = data.get('total_quantity', 0)
+                        pnl_pct = data.get('profit_loss_pct', 0)
+                        
+                        # Format symbol display
+                        display_symbol = symbol.replace("USDC", "").replace("USDT", "")
+                        
+                        # Add emoji based on P/L
+                        pnl_emoji = "🟢" if pnl_pct > 0 else "🔴" if pnl_pct < 0 else "⚪"
+                        
+                        print(f"{display_symbol:<10} "
+                              f"${avg_price:<11.4f} "
+                              f"${current_price:<11.4f} "
+                              f"{quantity:<10.6f} "
+                              f"{pnl_emoji} {pnl_pct:.2f}%")
+        
+        # Show the next scheduled DCA purchases
+        if performance_json and 'next_scheduled_buys' in json.loads(performance_json):
+            next_buys = json.loads(performance_json)['next_scheduled_buys']
+            
+            print("\nNext Scheduled DCA Purchases:")
+            print(f"{'Symbol':<10} {'Scheduled Time':<20}")
+            print("-" * 80)
+            
+            # Sort by next scheduled time
+            for symbol, time_str in sorted(next_buys.items(), key=lambda x: datetime.fromisoformat(x[1])):
+                # Format symbol display
+                display_symbol = symbol.replace("USDC", "").replace("USDT", "")
+                
+                # Format time
+                dt = datetime.fromisoformat(time_str)
+                formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+                
+                # Calculate time until next purchase
+                time_until = dt - datetime.now()
+                hours_until = time_until.total_seconds() / 3600
+                
+                if hours_until < 0:
+                    time_display = "Pending"
+                elif hours_until < 1:
+                    time_display = f"{int(time_until.total_seconds() / 60)} minutes"
+                else:
+                    time_display = f"{hours_until:.1f} hours"
+                
+                print(f"{display_symbol:<10} {formatted_time:<20} (in {time_display})")
+        
+        # Display recent DCA purchases
+        purchase_list = trader.redis.lrange('dca_purchase_list', 0, 4)
+        
+        if purchase_list:
+            print("\nRecent DCA Purchases:")
+            print(f"{'Time':<10} {'Symbol':<10} {'Price':<12} {'Amount':<12} {'Type':<15}")
+            print("-" * 80)
+            
+            # Process notifications from newest to oldest
+            for purchase_json in purchase_list:
+                try:
+                    purchase = json.loads(purchase_json)
+                    
+                    # Format time
+                    timestamp = datetime.fromisoformat(purchase.get('timestamp', ''))
+                    time_str = timestamp.strftime("%H:%M:%S")
+                    
+                    # Get purchase details
+                    symbol = purchase.get('symbol', '')
+                    price = purchase.get('price', 0)
+                    amount_usdc = purchase.get('amount_usdc', 0)
+                    purchase_type = purchase.get('purchase_type', 'scheduled').title()
+                    sim = purchase.get('simulation', False)
+                    
+                    # Format symbol for display
+                    display_symbol = symbol.replace("USDC", "").replace("USDT", "")
+                    
+                    # Add simulation marker
+                    sim_marker = "(sim) " if sim else ""
+                    
+                    print(f"{time_str:<10} {display_symbol:<10} ${price:<11.4f} ${amount_usdc:<11.2f} {sim_marker}{purchase_type:<12}")
+                except:
+                    continue
+                    
+        if not status_json and not performance_json:
+            print("No DCA strategy data available yet")
     except Exception as e:
         pass  # Silently ignore any errors here
 
@@ -1043,6 +1180,11 @@ async def run_order_book_analysis_service():
 async def run_grid_trading_service():
     """Run the grid trading strategy service"""
     service = GridTradingStrategy()
+    await service.run()
+
+async def run_dca_strategy_service():
+    """Run the DCA strategy service"""
+    service = DCAStrategy()
     await service.run()
 
 def run_async_service(async_func):
@@ -1168,6 +1310,15 @@ def main():
         )
         grid_trading_thread.start()
         logging.info("Grid Trading service started")
+        
+        # Start DCA Strategy service in a separate thread
+        dca_strategy_thread = threading.Thread(
+            target=run_async_service,
+            args=(run_dca_strategy_service,),
+            daemon=True
+        )
+        dca_strategy_thread.start()
+        logging.info("DCA Strategy service started")
         
         # Small delay to allow services to initialize
         time.sleep(3)
