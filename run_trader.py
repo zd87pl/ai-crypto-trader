@@ -20,6 +20,7 @@ from services.enhanced_social_monitor_service import EnhancedSocialMonitorServic
 from services.order_book_analysis_service import OrderBookAnalysisService
 from services.grid_trading_strategy import GridTradingStrategy
 from services.dca_strategy import DCAStrategy
+from services.arbitrage_detection_service import ArbitrageDetectionService
 
 def setup_logging():
     """Setup logging configuration"""
@@ -1121,6 +1122,129 @@ def print_status(trader, strategy_selector=None):
             print("No DCA strategy data available yet")
     except Exception as e:
         pass  # Silently ignore any errors here
+    
+    # Print Arbitrage Detection information
+    try:
+        print("\nArbitrage Detection Status:")
+        print("-" * 80)
+        
+        # Get arbitrage detection status
+        status_json = trader.redis.get('arbitrage_detection_status')
+        
+        if status_json:
+            status = json.loads(status_json)
+            
+            # Print status information
+            status_str = status.get('status', 'unknown')
+            sim_mode = status.get('simulation_mode', True)
+            
+            print(f"Status: {status_str.upper()} | {'SIMULATION MODE' if sim_mode else 'LIVE TRADING'}")
+            
+            if 'exchanges' in status:
+                print(f"Active exchanges: {', '.join(status['exchanges'])}")
+                
+            # Check for error information
+            if 'error' in status:
+                print(f"Error: {status['error']}")
+        
+        # Get arbitrage performance data
+        performance_json = trader.redis.get('arbitrage_performance')
+        
+        if performance_json:
+            performance = json.loads(performance_json)
+            
+            # Print performance summary
+            total_opportunities = performance.get('total_opportunities', 0)
+            profitable_opportunities = performance.get('profitable_opportunities', 0)
+            executed_arbitrages = performance.get('executed_arbitrages', 0)
+            total_profit = performance.get('total_profit', 0)
+            running_time = performance.get('running_time_hours', 0)
+            
+            if total_opportunities > 0:
+                print(f"\nArbitrage Performance (after {running_time:.1f} hours):")
+                print(f"Total opportunities: {total_opportunities} | Profitable: {profitable_opportunities}")
+                print(f"Executed arbitrages: {executed_arbitrages} | Total profit: {total_profit:.2f}%")
+                
+                # Calculate success rate
+                if total_opportunities > 0:
+                    success_rate = (profitable_opportunities / total_opportunities) * 100
+                    print(f"Success rate: {success_rate:.2f}%")
+        
+        # Get current arbitrage opportunities
+        opportunities_json = trader.redis.get('arbitrage_opportunities')
+        
+        if opportunities_json:
+            opportunities = json.loads(opportunities_json)
+            
+            # Check if we have recent opportunities (within the last 5 minutes)
+            timestamp = datetime.fromisoformat(opportunities.get('timestamp', '2000-01-01T00:00:00'))
+            if datetime.now() - timestamp < timedelta(minutes=5):
+                count = opportunities.get('count', 0)
+                if count > 0:
+                    print(f"\nCurrent Arbitrage Opportunities: {count}")
+                    print(f"{'Type':<15} {'Profit %':<10} {'Details':<50}")
+                    print("-" * 80)
+                    
+                    for opp in opportunities.get('opportunities', [])[:5]:  # Show top 5
+                        opp_type = opp.get('type', '').title()
+                        profit_pct = opp.get('adjusted_profit_pct', opp.get('profit_pct', 0))
+                        
+                        if opp_type == 'Triangle':
+                            # Format cycle
+                            cycle = ' → '.join(opp.get('cycle', []))
+                            details = f"Cycle: {cycle}"
+                        else:  # Cross-exchange
+                            symbol = opp.get('symbol', '')
+                            buy_exchange = opp.get('buy_exchange', '').title()
+                            sell_exchange = opp.get('sell_exchange', '').title()
+                            details = f"Buy {symbol} on {buy_exchange}, Sell on {sell_exchange}"
+                        
+                        # Add profit emoji
+                        profit_emoji = "🟢" if profit_pct >= 1.0 else "🟡" if profit_pct >= 0.5 else "⚪"
+                        
+                        print(f"{opp_type:<15} {profit_emoji} {profit_pct:<7.2f}% {details:<50}")
+        
+        # Get recent arbitrage history
+        history_list = trader.redis.lrange('arbitrage_opportunity_history', 0, 4)
+        
+        if history_list and not opportunities_json:
+            print("\nRecent Arbitrage Opportunities:")
+            print(f"{'Time':<10} {'Type':<15} {'Profit %':<10} {'Details':<50}")
+            print("-" * 80)
+            
+            for opportunity_json in history_list:
+                try:
+                    opp = json.loads(opportunity_json)
+                    
+                    # Format time
+                    timestamp = datetime.fromisoformat(opp.get('timestamp', ''))
+                    time_str = timestamp.strftime("%H:%M:%S")
+                    
+                    # Format details
+                    opp_type = opp.get('type', '').title()
+                    profit_pct = opp.get('adjusted_profit_pct', opp.get('profit_pct', 0))
+                    
+                    if opp_type == 'Triangle':
+                        # Format cycle
+                        cycle = ' → '.join(opp.get('cycle', []))
+                        details = f"Cycle: {cycle}"
+                    else:  # Cross-exchange
+                        symbol = opp.get('symbol', '')
+                        buy_exchange = opp.get('buy_exchange', '').title()
+                        sell_exchange = opp.get('sell_exchange', '').title()
+                        details = f"Buy {symbol} on {buy_exchange}, Sell on {sell_exchange}"
+                    
+                    # Add profit emoji
+                    profit_emoji = "🟢" if profit_pct >= 1.0 else "🟡" if profit_pct >= 0.5 else "⚪"
+                    
+                    print(f"{time_str:<10} {opp_type:<15} {profit_emoji} {profit_pct:<7.2f}% {details:<50}")
+                except:
+                    continue
+                
+        if not status_json and not performance_json and not opportunities_json and not history_list:
+            print("No arbitrage detection data available yet")
+    except Exception as e:
+        pass  # Silently ignore any errors here
 
 async def run_strategy_selection_service():
     """Run the strategy selection service"""
@@ -1185,6 +1309,11 @@ async def run_grid_trading_service():
 async def run_dca_strategy_service():
     """Run the DCA strategy service"""
     service = DCAStrategy()
+    await service.run()
+
+async def run_arbitrage_detection_service():
+    """Run the arbitrage detection service"""
+    service = ArbitrageDetectionService()
     await service.run()
 
 def run_async_service(async_func):
@@ -1319,6 +1448,15 @@ def main():
         )
         dca_strategy_thread.start()
         logging.info("DCA Strategy service started")
+        
+        # Start Arbitrage Detection service in a separate thread
+        arbitrage_thread = threading.Thread(
+            target=run_async_service,
+            args=(run_arbitrage_detection_service,),
+            daemon=True
+        )
+        arbitrage_thread.start()
+        logging.info("Arbitrage Detection service started")
         
         # Small delay to allow services to initialize
         time.sleep(3)

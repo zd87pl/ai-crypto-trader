@@ -112,7 +112,7 @@
 ### Trading Strategies
 - [x] **TS-01**: Implement grid trading strategy
 - [x] **TS-02**: Add DCA (Dollar Cost Averaging) strategy
-- [ ] **TS-03**: Implement arbitrage detection
+- [x] **TS-03**: Implement arbitrage detection
 - [ ] **TS-04**: Add market making capabilities
 - [ ] **TS-05**: Implement mean reversion strategies
 - [ ] **TS-06**: Add AI-powered entry/exit optimization

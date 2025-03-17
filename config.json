@@ -743,6 +743,60 @@
             }
         ]
     },
+    "arbitrage_detection": {
+        "enabled": true,
+        "simulation_mode": true,
+        "service_port": 8016,
+        "update_interval": 10,
+        "min_profit_pct": 0.5,
+        "trade_enabled": false,
+        "min_notional_usdc": 100,
+        "max_notional_usdc": 10000,
+        "min_depth_ratio": 2.0,
+        "auto_adjust_notional": true,
+        "symbol_blacklist": [],
+        "exchanges": [
+            {
+                "name": "binance",
+                "enabled": true,
+                "maker_fee": 0.001,
+                "taker_fee": 0.001,
+                "min_order_size": 10
+            }
+        ],
+        "triangle_arbitrage": {
+            "enabled": true,
+            "base_currencies": ["USDC", "USDT", "BUSD", "BTC", "ETH"],
+            "min_profit_pct": 0.3,
+            "max_exchange_steps": 3,
+            "check_balance": true,
+            "max_order_book_age_ms": 1000,
+            "min_volume_filter": 1000
+        },
+        "cross_exchange_arbitrage": {
+            "enabled": false,
+            "base_currencies": ["USDC", "USDT", "BTC"],
+            "min_profit_pct": 1.0,
+            "transfer_time_buffer_s": 60,
+            "fee_buffer_pct": 0.2,
+            "withdraw_fee_buffer": 1.1
+        },
+        "notification": {
+            "enabled": true,
+            "profit_threshold_pct": 0.5,
+            "interval_minutes": 5,
+            "summary_enabled": true,
+            "detail_level": "medium"
+        },
+        "reporting": {
+            "enabled": true,
+            "history_days": 30,
+            "opportunity_logging": true,
+            "min_log_profit_pct": 0.2,
+            "include_details": true,
+            "graph_visualization": true
+        }
+    },
     "dca_strategy": {
         "enabled": true,
         "simulation_mode": true,
