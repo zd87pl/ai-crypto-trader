@@ -359,6 +359,28 @@
         "prediction_confidence_threshold": 0.6,
         "service_port": 8010,
         "visualization_enabled": true,
+        "auto_optimize": true,
+        "optuna_trials": 20,
+        "optimization_interval": 604800,
+        "enable_shap": true,
+        "integrate_with_regime": true,
+        "advanced_models": {
+            "transformer": {
+                "enabled": true,
+                "num_heads": 4,
+                "key_dim": 16,
+                "ff_dim": 64
+            },
+            "multitask": {
+                "enabled": true,
+                "shared_layers": 2,
+                "task_specific_layers": 1
+            },
+            "probabilistic": {
+                "enabled": true,
+                "distribution_type": "normal"
+            }
+        },
         "model_architectures": {
             "lstm": {
                 "layers": [64, 32],
@@ -386,7 +408,24 @@
             "strategy_weight": 0.6,
             "risk_assessment_weight": 0.4,
             "combine_with_other_signals": true,
-            "trigger_alerts": true
+            "trigger_alerts": true,
+            "market_regime_adaptation": true,
+            "feature_importance_feedback": true
+        },
+        "model_evaluation": {
+            "rolling_window_size": 30,
+            "performance_metrics": [
+                "mae",
+                "rmse",
+                "mape",
+                "r2",
+                "direction_accuracy"
+            ],
+            "threshold_metrics": {
+                "min_direction_accuracy": 0.55,
+                "max_mae_percent": 2.0
+            },
+            "evaluation_interval": 43200
         }
     }
 }
