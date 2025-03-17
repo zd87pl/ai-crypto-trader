@@ -161,7 +161,19 @@ python dashboard.py
 - Helps focus data collection on high-value indicators
 - Logs to: `logs/feature_importance.log`
 
-### 13. Portfolio Risk Management Service
+### 13. Market Regime Detection Service
+- Identifies current market conditions using machine learning and rule-based systems
+- Classifies markets into four regimes: bull, bear, ranging, and volatile
+- Uses multiple detection methods: KMeans, Gaussian Mixture Models, Hidden Markov Models
+- Provides regime probabilities and confidence scores
+- Adapts trading strategies to current market conditions
+- Analyzes historical performance of strategies in different regimes
+- Generates market regime visualizations
+- Monitors regime changes and triggers strategy switching
+- Supports dynamic machine learning model retraining
+- Logs to: `logs/market_regime.log`
+
+### 14. Portfolio Risk Management Service
 - Implements portfolio-wide risk management
 - Calculates Value at Risk (VaR) across the entire portfolio
 - Provides adaptive stop-losses based on market volatility
@@ -438,6 +450,22 @@ For more detailed instructions, see `backtesting/README.md`.
             "volume"
         ]
     }
+}
+```
+
+### Market Regime Detection
+```json
+{
+    "regime": "bull",
+    "confidence": 0.87,
+    "probs": {
+        "bull": 0.65,
+        "volatile": 0.25,
+        "ranging": 0.08,
+        "bear": 0.02
+    },
+    "timestamp": "2024-11-24T15:45:22.134Z",
+    "data_end": "2024-11-24T15:45:00.000Z"
 }
 ```
 

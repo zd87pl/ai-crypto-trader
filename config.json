@@ -279,5 +279,55 @@
         },
         "notification_channels": ["redis", "file"],
         "weight_update_enabled": true
+    },
+    "market_regime": {
+        "enabled": true,
+        "check_interval": 1800,
+        "detection_method": "hybrid",
+        "ml_method": "kmeans",
+        "lookback_periods": {
+            "short": 24,
+            "medium": 72,
+            "long": 168
+        },
+        "thresholds": {
+            "bull": {
+                "trend_strength": 0.6,
+                "price_change": 5.0,
+                "volatility": 0.5
+            },
+            "bear": {
+                "trend_strength": 0.6,
+                "price_change": -5.0,
+                "volatility": 0.5
+            },
+            "volatile": {
+                "volatility": 1.5
+            },
+            "ranging": {
+                "trend_strength": 0.3,
+                "price_range": 3.0
+            }
+        },
+        "ml_config": {
+            "window_size": 30,
+            "n_regimes": 4,
+            "features": [
+                "return",
+                "volatility",
+                "trend_strength",
+                "rsi",
+                "macd",
+                "bb_width",
+                "adx",
+                "cci"
+            ]
+        },
+        "training_interval": 86400,
+        "min_training_samples": 100,
+        "visualization_enabled": true,
+        "primary_symbol": "BTCUSDC",
+        "primary_timeframe": "1h",
+        "service_port": 8005
     }
 }

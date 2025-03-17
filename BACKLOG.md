@@ -18,7 +18,7 @@
 - [x] **ML-01**: Implement genetic algorithms for strategy evolution
 - [x] **ML-02**: Add reinforcement learning capabilities
 - [x] **ML-03**: Create feature importance analysis for model inputs
-- [ ] **ML-04**: Develop market regime detection (trending/ranging/volatile)
+- [x] **ML-04**: Develop market regime detection (trending/ranging/volatile)
 - [ ] **ML-05**: Implement neural network models for price prediction
 
 ### Monitoring & Observability
@@ -102,7 +102,7 @@
 - [ ] **ANAL-02**: Enhance machine learning models for price prediction
 - [x] **ANAL-03**: Implement sentiment analysis from social media
 - [ ] **ANAL-04**: Add technical indicator combinations
-- [ ] **ANAL-05**: Implement market regime detection
+- [x] **ANAL-05**: Implement market regime detection
 - [ ] **ANAL-06**: Add volume profile analysis
 - [ ] **ANAL-07**: Implement deep learning for pattern recognition
 - [ ] **ANAL-08**: Add natural language processing for news analysis

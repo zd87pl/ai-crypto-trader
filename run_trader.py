@@ -40,10 +40,35 @@ def print_status(trader, strategy_selector=None):
     
     # Print current market regime if available
     try:
-        market_regime = trader.redis.get('current_market_regime')
-        if market_regime:
-            print(f"Market Regime: {market_regime}")
-    except:
+        market_regime_data = trader.redis.get('market_regime_history')
+        if market_regime_data:
+            regime_history = json.loads(market_regime_data)
+            if regime_history and len(regime_history) > 0:
+                # Get the most recent regime
+                current_regime = regime_history[-1]
+                regime_name = current_regime.get('regime', 'unknown')
+                confidence = current_regime.get('confidence', 0)
+                timestamp = current_regime.get('timestamp', '')
+                
+                # Format the timestamp
+                if timestamp:
+                    try:
+                        dt = datetime.fromisoformat(timestamp)
+                        timestamp = dt.strftime("%Y-%m-%d %H:%M:%S")
+                    except:
+                        pass
+                
+                # Show the regime with confidence
+                print(f"Market Regime: {regime_name.upper()} (Confidence: {confidence:.2f})")
+                print(f"Regime Last Updated: {timestamp}")
+                
+                # Show regime probabilities if available
+                if 'probs' in current_regime:
+                    print("\nRegime Probabilities:")
+                    probs = current_regime['probs']
+                    for regime, prob in sorted(probs.items(), key=lambda x: x[1], reverse=True):
+                        print(f"- {regime.upper()}: {prob:.2f}")
+    except Exception as e:
         pass
     
     # Print active trades
