@@ -633,5 +633,61 @@
             "anomaly_detection": true,
             "entity_relation_mapping": true
         }
+    },
+    "order_book_analysis": {
+        "enabled": true,
+        "symbols": ["BTCUSDC", "ETHUSDC", "BNBUSDC", "XRPUSDC", "SOLUSDC", "ADAUSDC"],
+        "analysis_interval": 60,
+        "service_port": 8013,
+        "max_depth": 20,
+        "max_history_size": 100,
+        "aggregation_enabled": true,
+        "aggregation_interval": 300,
+        "create_visualizations": true,
+        "max_levels": 20,
+        "significant_level_threshold": 2.0,
+        "clustering_enabled": true,
+        "n_clusters": 3,
+        "smoothing_window": 3,
+        "impact_price_levels": 5,
+        "support_resistance_window": 5,
+        "min_order_size": 1000.0,
+        "imbalance_threshold": 0.2,
+        "near_threshold": 1.0,
+        "far_threshold": 5.0,
+        "large_order_multiplier": 5.0,
+        "iceberg_repeat_threshold": 3,
+        "trade_sizes": [10000, 50000, 100000, 500000, 1000000],
+        "liquidity_signal_threshold": 0.2,
+        "pressure_signal_threshold": 0.15,
+        "level_proximity_threshold": 1.0,
+        "impact_signal_threshold": 1.5,
+        "overall_signal_threshold": 0.2,
+        "integration": {
+            "trading_signal_weight": 0.4,
+            "correlation_with_price": true,
+            "integrate_with_ai_analysis": true,
+            "calibration_interval": 86400
+        },
+        "alerts": {
+            "enabled": true,
+            "liquidity_imbalance_threshold": 0.4,
+            "wall_detection_threshold": 3.0,
+            "spoofing_detection": true,
+            "signal_confidence_threshold": 0.7
+        },
+        "feature_importance": {
+            "track_predictive_power": true,
+            "metrics": ["price_movement_accuracy", "correlation", "signal_quality"],
+            "update_interval": 86400
+        },
+        "visualization_settings": {
+            "bid_color": "green",
+            "ask_color": "red",
+            "support_color": "lightgreen",
+            "resistance_color": "lightcoral",
+            "chart_height": 800,
+            "chart_width": 1200
+        }
     }
 }

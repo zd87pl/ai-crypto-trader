@@ -17,6 +17,7 @@ from services.neural_network_service import NeuralNetworkService
 from services.pattern_recognition_service import PatternRecognitionService
 from services.news_analysis_service import NewsAnalysisService
 from services.enhanced_social_monitor_service import EnhancedSocialMonitorService
+from services.order_book_analysis_service import OrderBookAnalysisService
 
 def setup_logging():
     """Setup logging configuration"""
@@ -669,6 +670,193 @@ def print_status(trader, strategy_selector=None):
             print("No enhanced social metrics data available yet")
     except Exception as e:
         pass  # Silently ignore any errors here
+        
+    # Print order book analysis data
+    try:
+        print("\nOrder Book Analysis:")
+        print("-" * 80)
+        
+        # Get order book analysis summary
+        summary_json = trader.redis.get('order_book_analysis_summary')
+        
+        if summary_json:
+            summary = json.loads(summary_json)
+            
+            # Only print if the data is recent (less than 5 minutes old)
+            if 'timestamp' in summary:
+                summary_time = datetime.fromisoformat(summary['timestamp'])
+                if datetime.now() - summary_time < timedelta(minutes=5):
+                    # Print summary statistics
+                    monitored = summary.get('monitored_symbols', 0)
+                    buy_signals = summary.get('buy_signals', 0)
+                    sell_signals = summary.get('sell_signals', 0)
+                    neutral_signals = summary.get('neutral_signals', 0)
+                    
+                    # Display summary
+                    print(f"Monitored symbols: {monitored} | Signals: {buy_signals} Buy, {sell_signals} Sell, {neutral_signals} Neutral")
+                    
+                    # Print strongest buy/sell signals
+                    strongest_buy = summary.get('strongest_buy')
+                    strongest_buy_conf = summary.get('strongest_buy_confidence', 0)
+                    strongest_sell = summary.get('strongest_sell')
+                    strongest_sell_conf = summary.get('strongest_sell_confidence', 0)
+                    
+                    if strongest_buy:
+                        print(f"Strongest buy signal: {strongest_buy} (Confidence: {strongest_buy_conf:.2f})")
+                    if strongest_sell:
+                        print(f"Strongest sell signal: {strongest_sell} (Confidence: {strongest_sell_conf:.2f})")
+                    
+                    # Print signals by symbol
+                    print("\nOrder Book Trading Signals:")
+                    print(f"{'Symbol':<10} {'Signal':<10} {'Confidence':<12} {'Buy Signals':<12} {'Sell Signals':<12}")
+                    print("-" * 80)
+                    
+                    signals_by_symbol = summary.get('signals_by_symbol', {})
+                    displayed = 0
+                    
+                    # Show signals sorted by confidence
+                    sorted_symbols = []
+                    for symbol, data in signals_by_symbol.items():
+                        # Skip neutral signals with low confidence for cleaner display
+                        if data.get('signal') == 'neutral' and data.get('confidence', 0) < 0.7:
+                            continue
+                        
+                        # Calculate a sort value that prioritizes non-neutral signals and high confidence
+                        sort_value = 0
+                        if data.get('signal') != 'neutral':
+                            sort_value = data.get('confidence', 0)
+                        else:
+                            sort_value = data.get('confidence', 0) * 0.5
+                            
+                        sorted_symbols.append((symbol, data, sort_value))
+                    
+                    # Sort and display top signals
+                    for symbol, data, _ in sorted(sorted_symbols, key=lambda x: x[2], reverse=True)[:5]:
+                        signal = data.get('signal', 'neutral').upper()
+                        confidence = data.get('confidence', 0)
+                        buy_count = data.get('buy_signals', 0)
+                        sell_count = data.get('sell_signals', 0)
+                        
+                        # Add signal emoji
+                        signal_emoji = "🟢" if signal == "BUY" else "🔴" if signal == "SELL" else "⚪"
+                        
+                        # Format symbol for display
+                        display_symbol = symbol.replace("USDC", "").replace("USDT", "")
+                        
+                        print(f"{display_symbol:<10} {signal_emoji} {signal:<8} {confidence:<12.2f} {buy_count:<12} {sell_count:<12}")
+                        
+                        displayed += 1
+                        if displayed >= 5:  # Limit to 5 symbols
+                            break
+        
+        # Get specific order book metrics for a few key symbols
+        symbols = ["BTCUSDC", "ETHUSDC", "BNBUSDC"]  # Default symbols to check
+        displayed = 0
+        metrics_shown = False
+        
+        for symbol in symbols:
+            # Get aggregated metrics for cleaner display
+            metrics_key = f"order_book_agg:{symbol}"
+            metrics_json = trader.redis.get(metrics_key)
+            
+            if not metrics_json:
+                continue
+                
+            if not metrics_shown:
+                print("\nOrder Book Liquidity Metrics:")
+                print(f"{'Symbol':<10} {'Imbalance':<15} {'Bid/Ask Ratio':<15} {'Near Pressure':<15} {'Spread %':<10}")
+                print("-" * 80)
+                metrics_shown = True
+            
+            metrics = json.loads(metrics_json)
+            
+            # Only show if data is recent (less than 5 minutes old)
+            metrics_time = datetime.fromisoformat(metrics.get('timestamp', '2000-01-01T00:00:00'))
+            if datetime.now() - metrics_time > timedelta(minutes=5):
+                continue
+            
+            # Get current metrics
+            current = metrics.get('current_metrics', {})
+            imbalance = current.get('liquidity_imbalance', 0)
+            bid_ask_ratio = current.get('bid_ask_ratio', 1.0)
+            near_pressure = current.get('near_pressure', 0)
+            spread = current.get('spread_percentage', 0)
+            
+            # Add emojis based on metrics
+            imbalance_emoji = "🟢" if imbalance > 0.1 else "🔴" if imbalance < -0.1 else "⚪"
+            pressure_emoji = "🟢" if near_pressure > 0.1 else "🔴" if near_pressure < -0.1 else "⚪"
+            
+            # Format symbol for display
+            display_symbol = symbol.replace("USDC", "").replace("USDT", "")
+            
+            print(f"{display_symbol:<10} {imbalance_emoji} {imbalance:>8.2f} {bid_ask_ratio:>14.2f} {pressure_emoji} {near_pressure:>8.2f} {spread:>9.2f}%")
+            
+            displayed += 1
+            if displayed >= 5:  # Limit to 5 symbols
+                break
+        
+        # Check for support/resistance levels for key symbols
+        support_resist_shown = False
+        displayed = 0
+        
+        for symbol in symbols:
+            # Get full order book analysis for support/resistance
+            order_book_key = f"order_book:{symbol}"
+            order_book_json = trader.redis.get(order_book_key)
+            
+            if not order_book_json:
+                continue
+            
+            order_book_data = json.loads(order_book_json)
+            
+            # Only show if data is recent (less than 5 minutes old)
+            data_time = datetime.fromisoformat(order_book_data.get('timestamp', '2000-01-01T00:00:00'))
+            if datetime.now() - data_time > timedelta(minutes=5):
+                continue
+            
+            # Get support/resistance levels
+            support_levels = order_book_data.get('support_levels', [])
+            resistance_levels = order_book_data.get('resistance_levels', [])
+            
+            if not support_levels and not resistance_levels:
+                continue
+                
+            if not support_resist_shown:
+                print("\nKey Support & Resistance Levels:")
+                print(f"{'Symbol':<10} {'Type':<12} {'Price':<12} {'Strength':<10} {'Distance':<10}")
+                print("-" * 80)
+                support_resist_shown = True
+            
+            # Format symbol for display
+            display_symbol = symbol.replace("USDC", "").replace("USDT", "")
+            current_price = order_book_data.get('current_price', 0)
+            
+            # Show top support level
+            if support_levels:
+                top_support = support_levels[0]
+                support_price = top_support.get('price', 0)
+                support_strength = top_support.get('strength', 0)
+                support_distance = (current_price - support_price) / current_price * 100
+                
+                print(f"{display_symbol:<10} {'Support':<12} ${support_price:<11.4f} {support_strength:<10.2f} {support_distance:>9.2f}%")
+            
+            # Show top resistance level
+            if resistance_levels:
+                top_resistance = resistance_levels[0]
+                resistance_price = top_resistance.get('price', 0)
+                resistance_strength = top_resistance.get('strength', 0)
+                resistance_distance = (resistance_price - current_price) / current_price * 100
+                
+                print(f"{display_symbol:<10} {'Resistance':<12} ${resistance_price:<11.4f} {resistance_strength:<10.2f} {resistance_distance:>9.2f}%")
+            
+            displayed += 1
+            if displayed >= 5:  # Limit to 5 symbols
+                break
+                
+        if not metrics_shown and not support_resist_shown:
+            print("No order book analysis data available yet")
+    except Exception as e:
+        pass  # Silently ignore any errors here
 
 async def run_strategy_selection_service():
     """Run the strategy selection service"""
@@ -718,6 +906,11 @@ async def run_news_analysis_service():
 async def run_enhanced_social_monitor_service():
     """Run the enhanced social monitor service"""
     service = EnhancedSocialMonitorService()
+    await service.run()
+
+async def run_order_book_analysis_service():
+    """Run the order book analysis service"""
+    service = OrderBookAnalysisService()
     await service.run()
 
 def run_async_service(async_func):
@@ -825,6 +1018,15 @@ def main():
         )
         enhanced_social_thread.start()
         logging.info("Enhanced Social Monitor service started")
+        
+        # Start Order Book Analysis service in a separate thread
+        order_book_thread = threading.Thread(
+            target=run_async_service,
+            args=(run_order_book_analysis_service,),
+            daemon=True
+        )
+        order_book_thread.start()
+        logging.info("Order Book Analysis service started")
         
         # Small delay to allow services to initialize
         time.sleep(3)
