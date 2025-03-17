@@ -15,6 +15,7 @@ from ta.trend import SMAIndicator, EMAIndicator, MACD
 from ta.momentum import RSIIndicator, StochasticOscillator, WilliamsRIndicator
 from ta.volatility import BollingerBands
 from services.utils.indicator_combinations import calculate_indicator_combinations
+from services.utils.volume_profile_analyzer import VolumeProfileAnalyzer
 
 # Create logs directory if it doesn't exist
 os.makedirs('logs', exist_ok=True)
@@ -53,9 +54,16 @@ class MarketMonitorService:
         self.redis = None
         self.market_data = {}
         self.historical_data = {}  # Store historical data for technical analysis
+        self.volume_profiles = {}  # Store volume profile analysis by symbol
         self.running = True
         self.ws_url = "wss://stream.binance.com:9443/ws/!miniTicker@arr"
         self.health_check_port = int(os.getenv('MARKET_MONITOR_PORT', 8001))
+        
+        # Initialize volume profile analyzer
+        self.volume_profile_analyzer = VolumeProfileAnalyzer(
+            num_bins=self.config.get('volume_profile', {}).get('num_bins', 20),
+            value_area_pct=self.config.get('volume_profile', {}).get('value_area_pct', 0.7)
+        )
         
         # Rate limiting settings
         self.update_interval = 5  # Reduced from 15 to 5 seconds between updates
@@ -63,6 +71,13 @@ class MarketMonitorService:
         self.batch_size = 5  # Increased from 3 to 5 symbols per batch
         self.batch_interval = 2  # Reduced from 5 to 2 seconds between batches
         self.pending_updates = asyncio.Queue()  # Queue for pending market updates
+        
+        # Volume analysis settings
+        self.volume_profile_enabled = self.config.get('volume_profile', {}).get('enabled', True)
+        self.volume_profile_update_interval = self.config.get('volume_profile', {}).get('update_interval', 300)  # 5 minutes
+        self.volume_delta_enabled = self.config.get('volume_profile', {}).get('delta_enabled', True)
+        self.volume_anomaly_detection = self.config.get('volume_profile', {}).get('anomaly_detection', True)
+        self.last_volume_profile_update = {}
 
     async def connect_redis(self, max_retries=5, retry_delay=5):
         """Establish Redis connection with retries"""
@@ -250,6 +265,77 @@ class MarketMonitorService:
         except Exception as e:
             logger.error(f"Error calculating technical indicators: {str(e)}")
             return None
+            
+    def analyze_volume_profile(self, symbol, data):
+        """
+        Analyze volume profile for a given symbol
+        
+        Args:
+            symbol: The trading symbol
+            data: Historical price and volume data
+            
+        Returns:
+            Dictionary with volume profile analysis or None if error
+        """
+        try:
+            if not self.volume_profile_enabled:
+                logger.debug(f"Volume profile analysis is disabled, skipping for {symbol}")
+                return None
+            
+            # Check if we should update the volume profile
+            current_time = datetime.now()
+            last_update = self.last_volume_profile_update.get(symbol, datetime.min)
+            
+            if (current_time - last_update).total_seconds() < self.volume_profile_update_interval:
+                logger.debug(f"Using cached volume profile for {symbol}, last update was {(current_time - last_update).seconds}s ago")
+                return self.volume_profiles.get(symbol)
+                
+            # Use 5m timeframe for volume profile analysis
+            df_5m = data['data_5m'] if 'data_5m' in data else data['data_1m']
+            
+            # Make sure we have necessary columns
+            required_columns = ['open', 'high', 'low', 'close', 'volume']
+            if not all(col in df_5m.columns for col in required_columns):
+                logger.warning(f"Missing required columns for volume profile analysis: {symbol}")
+                return None
+            
+            # Convert to numeric if not already
+            for col in required_columns:
+                if not pd.api.types.is_numeric_dtype(df_5m[col]):
+                    df_5m[col] = pd.to_numeric(df_5m[col], errors='coerce')
+            
+            # Analyze volume profile
+            logger.info(f"Analyzing volume profile for {symbol}")
+            profile_result = self.volume_profile_analyzer.analyze_volume_profile(df_5m)
+            
+            # Check for error
+            if 'error' in profile_result:
+                logger.error(f"Error in volume profile analysis for {symbol}: {profile_result['error']}")
+                return None
+            
+            # Add additional volume analysis if enabled
+            if self.volume_delta_enabled:
+                volume_delta = self.volume_profile_analyzer.analyze_volume_delta(df_5m)
+                if 'error' not in volume_delta:
+                    profile_result['volume_delta'] = volume_delta
+            
+            # Add volume anomaly detection if enabled
+            if self.volume_anomaly_detection:
+                anomalies = self.volume_profile_analyzer.detect_volume_anomalies(df_5m)
+                if 'error' not in anomalies:
+                    profile_result['volume_anomalies'] = anomalies
+            
+            # Store in cache
+            self.volume_profiles[symbol] = profile_result
+            self.last_volume_profile_update[symbol] = current_time
+            
+            logger.info(f"Completed volume profile analysis for {symbol}")
+            
+            return profile_result
+            
+        except Exception as e:
+            logger.error(f"Error analyzing volume profile for {symbol}: {str(e)}")
+            return None
 
     async def process_market_data(self, msg):
         """Process incoming market data and queue updates"""
@@ -351,6 +437,45 @@ class MarketMonitorService:
                                 except Exception as e:
                                     logger.error(f"Failed to calculate combined indicators: {str(e)}")
                                     # Continue without combined indicators
+                                
+                                # Add volume profile analysis
+                                try:
+                                    volume_profile = self.analyze_volume_profile(symbol, data)
+                                    if volume_profile:
+                                        # Add core volume profile metrics to market update
+                                        volume_profile_summary = {
+                                            'poc': volume_profile['poc'],
+                                            'value_area_high': volume_profile['value_area_high'],
+                                            'value_area_low': volume_profile['value_area_low'],
+                                            'signal': volume_profile['signals']['overall'],
+                                            'summary': volume_profile['summary']
+                                        }
+                                        
+                                        # Add volume delta insights if available
+                                        if 'volume_delta' in volume_profile and 'signals' in volume_profile['volume_delta']:
+                                            volume_profile_summary['volume_pressure'] = volume_profile['volume_delta']['signals']['overall_pressure']
+                                            
+                                            # Add divergence signal if present
+                                            if volume_profile['volume_delta']['signals']['divergence'] != 'no_divergence':
+                                                volume_profile_summary['volume_divergence'] = volume_profile['volume_delta']['signals']['divergence']
+                                        
+                                        # Add volume anomaly info if available
+                                        if 'volume_anomalies' in volume_profile and volume_profile['volume_anomalies'].get('anomalies_detected', False):
+                                            volume_profile_summary['volume_anomalies'] = True
+                                            volume_profile_summary['recent_anomaly_percentage'] = volume_profile['volume_anomalies'].get('recent_anomaly_percentage', 0)
+                                        
+                                        # Add to market update
+                                        market_update['volume_profile'] = volume_profile_summary
+                                        
+                                        # Keep the full analysis separate for detailed queries
+                                        self.volume_profiles[symbol] = volume_profile
+                                        
+                                        logger.debug(f"Added volume profile analysis for {symbol}")
+                                    else:
+                                        logger.debug(f"No volume profile available for {symbol}")
+                                except Exception as e:
+                                    logger.error(f"Error adding volume profile to market update: {str(e)}")
+                                    # Continue without volume profile
 
                                 # Store in local cache
                                 self.market_data[symbol] = market_update

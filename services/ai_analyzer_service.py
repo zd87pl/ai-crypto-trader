@@ -212,6 +212,43 @@ class AIAnalyzerService:
                             elif data['trend'] == 'downtrend':
                                 bullish_signals += 1
                 
+                # Check for volume profile signals if available
+                if 'volume_profile' in data:
+                    vp = data['volume_profile']
+                    
+                    # Add signals based on volume profile
+                    if vp['signal'] == 'potential_resistance':
+                        bearish_signals += 1
+                    elif vp['signal'] == 'potential_support':
+                        bullish_signals += 1
+                    elif vp['signal'] == 'overbought':
+                        bearish_signals += 1
+                    elif vp['signal'] == 'oversold':
+                        bullish_signals += 1
+                    
+                    # Volume pressure signals
+                    if 'volume_pressure' in vp:
+                        if vp['volume_pressure'] in ['strong_buying', 'moderate_buying']:
+                            bullish_signals += 1
+                        elif vp['volume_pressure'] in ['strong_selling', 'moderate_selling']:
+                            bearish_signals += 1
+                    
+                    # Volume divergence signals
+                    if 'volume_divergence' in vp:
+                        if vp['volume_divergence'] == 'bullish_divergence':
+                            bullish_signals += 1
+                        elif vp['volume_divergence'] == 'bearish_divergence':
+                            bearish_signals += 1
+                    
+                    # Volume anomalies
+                    if vp.get('volume_anomalies', False) and vp.get('recent_anomaly_percentage', 0) > 20:
+                        # High volume anomalies often precede significant price movements
+                        # Add a signal in the direction of the current trend
+                        if data['trend'] == 'uptrend':
+                            bullish_signals += 1
+                        elif data['trend'] == 'downtrend':
+                            bearish_signals += 1
+                
                 # Determine overall sentiment
                 if bullish_signals > bearish_signals + 2:
                     market_sentiment = "strongly bullish"
@@ -247,6 +284,55 @@ class AIAnalyzerService:
                         direction = "upward" if breakout['direction'] > 0 else "downward"
                         market_regime_info += f"Potential {direction} breakout detected. "
             
+            # Add volume profile information if available
+            volume_profile_info = ""
+            if symbol in self.market_data and 'volume_profile' in self.market_data[symbol]:
+                vp = self.market_data[symbol]['volume_profile']
+                
+                # Add summary if available
+                if 'summary' in vp:
+                    volume_profile_info = vp['summary'] + " "
+                    
+                # Or build our own summary based on key metrics
+                else:
+                    # POC and value area
+                    current_price = self.market_data[symbol]['current_price']
+                    
+                    if 'poc' in vp and 'value_area_high' in vp and 'value_area_low' in vp:
+                        poc = vp['poc']
+                        vah = vp['value_area_high']
+                        val = vp['value_area_low']
+                        
+                        # Check price relation to value area
+                        if current_price > vah:
+                            volume_profile_info += "Price is above the value area. "
+                        elif current_price < val:
+                            volume_profile_info += "Price is below the value area. "
+                        else:
+                            volume_profile_info += "Price is inside the value area. "
+                        
+                        # Add POC relation
+                        if abs(current_price - poc) / current_price < 0.005:  # Within 0.5%
+                            volume_profile_info += "Price is at the point of control (highest volume level). "
+                    
+                    # Add volume pressure if available
+                    if 'volume_pressure' in vp:
+                        if vp['volume_pressure'] == 'strong_buying':
+                            volume_profile_info += "Strong buying pressure detected in volume analysis. "
+                        elif vp['volume_pressure'] == 'strong_selling':
+                            volume_profile_info += "Strong selling pressure detected in volume analysis. "
+                    
+                    # Add volume divergence
+                    if 'volume_divergence' in vp:
+                        if vp['volume_divergence'] == 'bullish_divergence':
+                            volume_profile_info += "Bullish price-volume divergence detected. "
+                        elif vp['volume_divergence'] == 'bearish_divergence':
+                            volume_profile_info += "Bearish price-volume divergence detected. "
+                    
+                    # Add volume anomalies info
+                    if vp.get('volume_anomalies', False) and vp.get('recent_anomaly_percentage', 0) > 15:
+                        volume_profile_info += f"Unusual volume activity detected ({vp.get('recent_anomaly_percentage', 0):.0f}% anomalies). "
+            
             # Get social context
             social_context = "No significant social activity"
             if symbol in self.social_data:
@@ -264,7 +350,7 @@ class AIAnalyzerService:
                 if social['metrics']['social_engagement'] > self.config['lunarcrush']['min_engagement']:
                     social_context += f" with high engagement ({social['metrics']['social_engagement']} interactions)"
             
-            return f"Current market sentiment appears {market_sentiment}. {market_regime_info}{social_context}."
+            return f"Current market sentiment appears {market_sentiment}. {market_regime_info}{volume_profile_info}{social_context}."
             
         except Exception as e:
             logger.error(f"Error generating market context: {str(e)}")
@@ -335,6 +421,30 @@ class AIAnalyzerService:
                 for indicator in key_indicators:
                     if indicator in combined:
                         combined_indicators_data[indicator] = combined[indicator]
+            
+            # Extract volume profile data if available
+            volume_profile_data = {}
+            if 'volume_profile' in market_update:
+                vp = market_update['volume_profile']
+                
+                # Include all volume profile metrics
+                volume_profile_data = vp
+                
+                # Add description to explain what each value means
+                volume_profile_data['description'] = {
+                    'poc': 'Point of Control - price level with highest trading volume',
+                    'value_area_high': 'Upper bound of the Value Area (70% of volume)',
+                    'value_area_low': 'Lower bound of the Value Area (70% of volume)',
+                    'signal': 'Trading signal derived from volume profile analysis',
+                }
+                
+                # If we have volume pressure info, add it to the description
+                if 'volume_pressure' in vp:
+                    volume_profile_data['description']['volume_pressure'] = 'Direction of volume pressure (buying vs selling)'
+                
+                # If we have volume divergence, add it to the description
+                if 'volume_divergence' in vp:
+                    volume_profile_data['description']['volume_divergence'] = 'Divergence between price and volume movement'
                 
                 # Create a summary of combined indicators for the prompt
                 combined_indicators_summary = []
@@ -397,7 +507,8 @@ class AIAnalyzerService:
                 **market_update, 
                 **social_metrics, 
                 'market_context': market_context,
-                'combined_indicators': combined_indicators_data
+                'combined_indicators': combined_indicators_data,
+                'volume_profile': volume_profile_data
             }
 
             logger.info(f"Starting analysis for {symbol}")

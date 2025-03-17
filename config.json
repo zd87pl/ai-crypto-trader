@@ -330,6 +330,24 @@
         "primary_timeframe": "1h",
         "service_port": 8005
     },
+    "volume_profile": {
+        "enabled": true,
+        "num_bins": 20,
+        "value_area_pct": 0.7,
+        "update_interval": 300,
+        "delta_enabled": true,
+        "anomaly_detection": true,
+        "anomaly_params": {
+            "window": 20,
+            "std_threshold": 2.0
+        },
+        "analysis_timeframe": "5m",
+        "visualization_enabled": true,
+        "min_volume_for_analysis": 10000,
+        "store_historical_profiles": true,
+        "history_retention_days": 7,
+        "enable_historical_comparison": true
+    },
     "neural_network": {
         "enabled": true,
         "model_type": "lstm",
