@@ -178,6 +178,40 @@ class AIAnalyzerService:
                     if data[change_key] > 0: bullish_signals += 1
                     elif data[change_key] < 0: bearish_signals += 1
                 
+                # Check for combined indicators if available
+                if 'combined_indicators' in data:
+                    combined = data['combined_indicators']
+                    
+                    # Trend confirmation indicator
+                    if 'trend_confirmation' in combined:
+                        trend_conf = combined['trend_confirmation']
+                        if trend_conf > 0.5: bullish_signals += 1
+                        elif trend_conf < -0.5: bearish_signals += 1
+                    
+                    # Oscillator consensus
+                    if 'oscillator_consensus' in combined:
+                        consensus = combined['oscillator_consensus']
+                        if consensus['signal'] == 'oversold' and consensus['agreement'] > 0.5: 
+                            bullish_signals += 1
+                        elif consensus['signal'] == 'overbought' and consensus['agreement'] > 0.5:
+                            bearish_signals += 1
+                    
+                    # Market regime
+                    if 'market_regime_indicator' in combined:
+                        regime = combined['market_regime_indicator']
+                        # Add context about market regime but don't affect signals directly
+                        
+                    # Reversal probability
+                    if 'reversal_probability' in combined:
+                        reversal = combined['reversal_probability']
+                        if reversal['probability'] > 0.7:
+                            # High probability of reversal
+                            # Counter the current trend
+                            if data['trend'] == 'uptrend':
+                                bearish_signals += 1
+                            elif data['trend'] == 'downtrend':
+                                bullish_signals += 1
+                
                 # Determine overall sentiment
                 if bullish_signals > bearish_signals + 2:
                     market_sentiment = "strongly bullish"
@@ -188,6 +222,31 @@ class AIAnalyzerService:
                 elif bearish_signals > bullish_signals:
                     market_sentiment = "moderately bearish"
                 
+            # Get market regime information (if available)
+            market_regime_info = ""
+            if symbol in self.market_data and 'combined_indicators' in self.market_data[symbol]:
+                combined = self.market_data[symbol]['combined_indicators']
+                
+                # Market regime context
+                if 'market_regime_indicator' in combined:
+                    regime = combined['market_regime_indicator']
+                    if regime['confidence'] > 0.6:
+                        market_regime_info = f"Market is in a {regime['regime']} regime. "
+                
+                # Add reversal probability if high
+                if 'reversal_probability' in combined:
+                    reversal = combined['reversal_probability']
+                    if reversal['probability'] > 0.7:
+                        direction = "downward" if self.market_data[symbol]['trend'] == 'uptrend' else "upward"
+                        market_regime_info += f"High probability ({int(reversal['probability']*100)}%) of {direction} reversal. "
+                
+                # Add breakout information if detected
+                if 'breakout_confirmation' in combined:
+                    breakout = combined['breakout_confirmation']
+                    if breakout['direction'] != 0 and breakout['confirmation'] > 0.6:
+                        direction = "upward" if breakout['direction'] > 0 else "downward"
+                        market_regime_info += f"Potential {direction} breakout detected. "
+            
             # Get social context
             social_context = "No significant social activity"
             if symbol in self.social_data:
@@ -205,7 +264,7 @@ class AIAnalyzerService:
                 if social['metrics']['social_engagement'] > self.config['lunarcrush']['min_engagement']:
                     social_context += f" with high engagement ({social['metrics']['social_engagement']} interactions)"
             
-            return f"Current market sentiment appears {market_sentiment}. {social_context}."
+            return f"Current market sentiment appears {market_sentiment}. {market_regime_info}{social_context}."
             
         except Exception as e:
             logger.error(f"Error generating market context: {str(e)}")
@@ -257,9 +316,89 @@ class AIAnalyzerService:
 
             # Generate market context
             market_context = self.get_market_context(symbol)
+            
+            # Extract key combined indicators if available
+            combined_indicators_data = {}
+            if 'combined_indicators' in market_update:
+                combined = market_update['combined_indicators']
+                
+                # Select most relevant combined indicators for AI analysis
+                key_indicators = [
+                    'trend_confirmation',
+                    'oscillator_consensus',
+                    'market_regime_indicator',
+                    'reversal_probability',
+                    'trend_strength_index',
+                    'breakout_confirmation'
+                ]
+                
+                for indicator in key_indicators:
+                    if indicator in combined:
+                        combined_indicators_data[indicator] = combined[indicator]
+                
+                # Create a summary of combined indicators for the prompt
+                combined_indicators_summary = []
+                
+                # Add trend confirmation
+                if 'trend_confirmation' in combined:
+                    conf = combined['trend_confirmation']
+                    if conf > 0.5:
+                        combined_indicators_summary.append(f"Strong uptrend confirmation ({conf:.2f})")
+                    elif conf < -0.5:
+                        combined_indicators_summary.append(f"Strong downtrend confirmation ({abs(conf):.2f})")
+                
+                # Add oscillator consensus
+                if 'oscillator_consensus' in combined:
+                    consensus = combined['oscillator_consensus']
+                    if consensus['signal'] != 'neutral' and consensus['strength'] > 0.5:
+                        combined_indicators_summary.append(
+                            f"Oscillator consensus: {consensus['signal']} (strength: {consensus['strength']:.2f}, agreement: {consensus['agreement']:.2f})"
+                        )
+                
+                # Add market regime
+                if 'market_regime_indicator' in combined:
+                    regime = combined['market_regime_indicator']
+                    if regime['confidence'] > 0.6:
+                        combined_indicators_summary.append(
+                            f"Market regime: {regime['regime']} (confidence: {regime['confidence']:.2f})"
+                        )
+                
+                # Add reversal probability
+                if 'reversal_probability' in combined:
+                    reversal = combined['reversal_probability']
+                    if reversal['probability'] > 0.5:
+                        signals_str = ", ".join(reversal['signals'][:3])  # Limit to top 3 signals
+                        combined_indicators_summary.append(
+                            f"Reversal probability: {reversal['probability']:.2f} [{signals_str}]"
+                        )
+                
+                # Add trend strength
+                if 'trend_strength_index' in combined:
+                    tsi = combined['trend_strength_index']
+                    direction_text = "bullish" if tsi['direction'] > 0 else ("bearish" if tsi['direction'] < 0 else "neutral")
+                    combined_indicators_summary.append(
+                        f"Trend strength: {tsi['strength']:.2f} ({direction_text}, confidence: {tsi['confidence']:.2f})"
+                    )
+                
+                # Add breakout confirmation
+                if 'breakout_confirmation' in combined:
+                    breakout = combined['breakout_confirmation']
+                    if breakout['direction'] != 0 and breakout['confirmation'] > 0.5:
+                        combined_indicators_summary.append(
+                            f"Breakout: {breakout['status']} (confirmation: {breakout['confirmation']:.2f})"
+                        )
+                
+                # Add summary to analysis data
+                if combined_indicators_summary:
+                    combined_indicators_data['summary'] = "\n".join(combined_indicators_summary)
 
             # Combine data for analysis
-            analysis_data = {**market_update, **social_metrics, 'market_context': market_context}
+            analysis_data = {
+                **market_update, 
+                **social_metrics, 
+                'market_context': market_context,
+                'combined_indicators': combined_indicators_data
+            }
 
             logger.info(f"Starting analysis for {symbol}")
             logger.debug(f"Analysis data: {json.dumps(analysis_data, indent=2)}")

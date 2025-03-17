@@ -14,6 +14,7 @@ import numpy as np
 from ta.trend import SMAIndicator, EMAIndicator, MACD
 from ta.momentum import RSIIndicator, StochasticOscillator, WilliamsRIndicator
 from ta.volatility import BollingerBands
+from services.utils.indicator_combinations import calculate_indicator_combinations
 
 # Create logs directory if it doesn't exist
 os.makedirs('logs', exist_ok=True)
@@ -337,6 +338,19 @@ class MarketMonitorService:
                                     'price_change_5m': indicators['price_change_5m'],
                                     'price_change_15m': indicators['price_change_15m']
                                 }
+                                
+                                # Calculate indicator combinations
+                                try:
+                                    combined_indicators = calculate_indicator_combinations(market_update)
+                                    if 'error' not in combined_indicators:
+                                        # Add combined indicators to market update
+                                        market_update['combined_indicators'] = combined_indicators
+                                        logger.debug(f"Added {len(combined_indicators)} combined indicators")
+                                    else:
+                                        logger.warning(f"Error calculating combined indicators: {combined_indicators['error']}")
+                                except Exception as e:
+                                    logger.error(f"Failed to calculate combined indicators: {str(e)}")
+                                    # Continue without combined indicators
 
                                 # Store in local cache
                                 self.market_data[symbol] = market_update
