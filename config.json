@@ -689,5 +689,58 @@
             "chart_height": 800,
             "chart_width": 1200
         }
+    },
+    "grid_trading": {
+        "enabled": true,
+        "simulation_mode": true,
+        "service_port": 8014,
+        "update_interval": 60,
+        "symbols": ["BTCUSDC", "ETHUSDC", "BNBUSDC"],
+        "grid_type": "arithmetic",
+        "num_grids": 10,
+        "grid_spread": 0.5,
+        "auto_boundaries": true,
+        "lower_boundary_pct": 5.0,
+        "upper_boundary_pct": 5.0,
+        "quantity_per_grid": 0.01,
+        "max_active_grids": 6,
+        "order_size_type": "fixed",
+        "max_total_investment": 0.2,
+        "stop_loss_enabled": true,
+        "stop_loss_pct": 10.0,
+        "volatility_lookback": 14,
+        "auto_adjust_period": 86400,
+        "adapt_to_market_regime": true,
+        "rebalance_frequency": 3600,
+        "notify_on_trade": true,
+        "ranging_num_grids": 15,
+        "ranging_lower_boundary_pct": 3.0,
+        "ranging_upper_boundary_pct": 3.0,
+        "trending_num_grids": 8,
+        "trending_lower_boundary_pct": 8.0,
+        "trending_upper_boundary_pct": 8.0,
+        "volatile_num_grids": 12,
+        "volatile_lower_boundary_pct": 6.0,
+        "volatile_upper_boundary_pct": 6.0,
+        "symbol_settings": [
+            {
+                "symbol": "BTCUSDC",
+                "quantity_per_grid": 0.001,
+                "lower_boundary_pct": 4.0,
+                "upper_boundary_pct": 4.0
+            },
+            {
+                "symbol": "ETHUSDC",
+                "quantity_per_grid": 0.01,
+                "lower_boundary_pct": 5.0,
+                "upper_boundary_pct": 5.0
+            },
+            {
+                "symbol": "BNBUSDC",
+                "quantity_per_grid": 0.1,
+                "lower_boundary_pct": 6.0,
+                "upper_boundary_pct": 6.0
+            }
+        ]
     }
 }

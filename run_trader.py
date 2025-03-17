@@ -18,6 +18,7 @@ from services.pattern_recognition_service import PatternRecognitionService
 from services.news_analysis_service import NewsAnalysisService
 from services.enhanced_social_monitor_service import EnhancedSocialMonitorService
 from services.order_book_analysis_service import OrderBookAnalysisService
+from services.grid_trading_strategy import GridTradingStrategy
 
 def setup_logging():
     """Setup logging configuration"""
@@ -857,6 +858,132 @@ def print_status(trader, strategy_selector=None):
             print("No order book analysis data available yet")
     except Exception as e:
         pass  # Silently ignore any errors here
+        
+    # Print grid trading information
+    try:
+        print("\nGrid Trading Status:")
+        print("-" * 80)
+        
+        # Get grid trading status
+        status_json = trader.redis.get('grid_trading_status')
+        
+        if status_json:
+            status = json.loads(status_json)
+            
+            # Print status information
+            status_str = status.get('status', 'unknown')
+            sim_mode = status.get('simulation_mode', True)
+            
+            print(f"Status: {status_str.upper()} | {'SIMULATION MODE' if sim_mode else 'LIVE TRADING'}")
+            
+            if 'symbols' in status:
+                print(f"Active symbols: {', '.join(status['symbols'])}")
+                
+            # Check for error information
+            if 'error' in status:
+                print(f"Error: {status['error']}")
+        
+        # Get grid performance data
+        performance_json = trader.redis.get('grid_performance')
+        
+        if performance_json:
+            performance = json.loads(performance_json)
+            
+            # Print performance summary
+            total_trades = performance.get('total_trades', 0)
+            profitable_trades = performance.get('profitable_trades', 0)
+            win_rate = performance.get('win_rate', 0)
+            total_profit = performance.get('total_profit', 0)
+            profit_per_day = performance.get('profit_per_day', 0)
+            running_time = performance.get('running_time_hours', 0)
+            
+            if total_trades > 0:
+                print(f"\nTrading Performance (after {running_time:.1f} hours):")
+                print(f"Total trades: {total_trades} | Win rate: {win_rate:.2f} ({profitable_trades}/{total_trades})")
+                print(f"Total profit: ${total_profit:.6f} | Daily profit rate: ${profit_per_day:.6f}")
+                
+                # Show profit by symbol if available
+                if 'symbol_profits' in performance and performance['symbol_profits']:
+                    print("\nProfits by Symbol:")
+                    for symbol, profit in sorted(performance['symbol_profits'].items(), 
+                                              key=lambda x: x[1], reverse=True):
+                        # Format symbol display
+                        display_symbol = symbol.replace("USDC", "").replace("USDT", "")
+                        print(f"- {display_symbol}: ${profit:.6f}")
+        
+        # Get grid configurations and active orders
+        grid_info_shown = False
+        
+        # Default symbols to check
+        symbols = ["BTCUSDC", "ETHUSDC", "BNBUSDC"]
+        
+        for symbol in symbols:
+            grid_config_json = trader.redis.get(f'grid_config:{symbol}')
+            
+            if not grid_config_json:
+                continue
+                
+            if not grid_info_shown:
+                print("\nActive Grid Configurations:")
+                print(f"{'Symbol':<10} {'Lower':<12} {'Upper':<12} {'Current':<12} {'Grid Levels':<12} {'Qty/Grid':<10}")
+                print("-" * 80)
+                grid_info_shown = True
+            
+            grid_config = json.loads(grid_config_json)
+            
+            # Get key grid parameters
+            lower = grid_config.get('lower_boundary', 0)
+            upper = grid_config.get('upper_boundary', 0)
+            current = grid_config.get('current_price', 0)
+            grid_levels = len(grid_config.get('grid_levels', []))
+            quantity = grid_config.get('quantity', 0)
+            
+            # Format symbol for display
+            display_symbol = symbol.replace("USDC", "").replace("USDT", "")
+            
+            print(f"{display_symbol:<10} ${lower:<11.2f} ${upper:<11.2f} ${current:<11.2f} {grid_levels:<12} {quantity:<10.6f}")
+        
+        # Display recent grid trades
+        notification_list = trader.redis.lrange('grid_trade_notifications', 0, 4)
+        
+        if notification_list:
+            print("\nRecent Grid Trades:")
+            print(f"{'Time':<10} {'Symbol':<10} {'Side':<10} {'Price':<12} {'Profit':<12}")
+            print("-" * 80)
+            
+            # Process notifications from newest to oldest
+            for notification_json in reversed(notification_list):
+                try:
+                    notification = json.loads(notification_json)
+                    
+                    # Format time
+                    timestamp = datetime.fromisoformat(notification.get('timestamp', ''))
+                    time_str = timestamp.strftime("%H:%M:%S")
+                    
+                    # Get trade details
+                    symbol = notification.get('symbol', '')
+                    side = notification.get('side', '')
+                    price = notification.get('price', 0)
+                    profit = notification.get('profit', 0)
+                    sim = notification.get('simulation', False)
+                    
+                    # Format symbol for display
+                    display_symbol = symbol.replace("USDC", "").replace("USDT", "")
+                    
+                    # Add emoji for side
+                    side_emoji = "🟢" if side == "BUY" else "🔴" if side == "SELL" else "⚪"
+                    
+                    # Add simulation marker
+                    sim_marker = "(sim) " if sim else ""
+                    
+                    print(f"{time_str:<10} {display_symbol:<10} {side_emoji} {side:<8} ${price:<11.4f} {sim_marker}${profit:<10.6f}")
+                except:
+                    continue
+                    
+        if not grid_info_shown and not performance_json:
+            print("No grid trading data available yet")
+    except Exception as e:
+        pass  # Silently ignore any errors here
 
 async def run_strategy_selection_service():
     """Run the strategy selection service"""
@@ -911,6 +1038,11 @@ async def run_enhanced_social_monitor_service():
 async def run_order_book_analysis_service():
     """Run the order book analysis service"""
     service = OrderBookAnalysisService()
+    await service.run()
+
+async def run_grid_trading_service():
+    """Run the grid trading strategy service"""
+    service = GridTradingStrategy()
     await service.run()
 
 def run_async_service(async_func):
@@ -1027,6 +1159,15 @@ def main():
         )
         order_book_thread.start()
         logging.info("Order Book Analysis service started")
+        
+        # Start Grid Trading service in a separate thread
+        grid_trading_thread = threading.Thread(
+            target=run_async_service,
+            args=(run_grid_trading_service,),
+            daemon=True
+        )
+        grid_trading_thread.start()
+        logging.info("Grid Trading service started")
         
         # Small delay to allow services to initialize
         time.sleep(3)
