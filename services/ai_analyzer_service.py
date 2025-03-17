@@ -350,7 +350,30 @@ class AIAnalyzerService:
                 if social['metrics']['social_engagement'] > self.config['lunarcrush']['min_engagement']:
                     social_context += f" with high engagement ({social['metrics']['social_engagement']} interactions)"
             
-            return f"Current market sentiment appears {market_sentiment}. {market_regime_info}{volume_profile_info}{social_context}."
+            # Get news analysis context
+            news_context = ""
+            if symbol in self.market_data:
+                data = self.market_data[symbol]
+                if 'social_metrics' in data and 'news_analysis' in data['social_metrics']:
+                    news_analysis = data['social_metrics']['news_analysis']
+                    
+                    # Add sentiment from advanced news analysis
+                    news_sentiment = news_analysis.get('sentiment', 'neutral')
+                    if news_sentiment == 'very_positive':
+                        news_context = "News sentiment is very positive."
+                    elif news_sentiment == 'positive':
+                        news_context = "News sentiment is positive."
+                    elif news_sentiment == 'negative':
+                        news_context = "News sentiment is negative."
+                    elif news_sentiment == 'very_negative':
+                        news_context = "News sentiment is very negative."
+                    
+                    # Add topics if available
+                    topics = news_analysis.get('topics', [])
+                    if topics:
+                        news_context += f" Key topics in the news: {', '.join(topics[:3])}."
+            
+            return f"Current market sentiment appears {market_sentiment}. {market_regime_info}{volume_profile_info}{social_context}. {news_context}"
             
         except Exception as e:
             logger.error(f"Error generating market context: {str(e)}")
@@ -399,6 +422,74 @@ class AIAnalyzerService:
                         elif news['sentiment'] < 0.4: sentiment = "negative"
                         news_summary.append(f"- {news['title']} ({sentiment} sentiment)")
                     social_metrics['recent_news'] = "\n".join(news_summary)
+                
+            # Get advanced news analysis if available
+            news_analysis_data = {}
+            try:
+                news_analysis_json = await self.redis.hget('news_analysis', symbol)
+                if news_analysis_json:
+                    news_analysis = json.loads(news_analysis_json)
+                    
+                    # Check if analysis is recent (less than 6 hours old)
+                    analysis_time = datetime.fromisoformat(news_analysis.get('timestamp', '2000-01-01T00:00:00'))
+                    if (datetime.now() - analysis_time).total_seconds() < 21600:  # 6 hours
+                        # Extract key data
+                        news_sentiment = news_analysis.get('sentiment', {}).get('overall', 'neutral')
+                        sentiment_score = news_analysis.get('sentiment', {}).get('score', 0.0)
+                        
+                        # Convert sentiment to numeric score (-1 to 1)
+                        sentiment_numeric = 0.0
+                        if news_sentiment == 'very_positive': sentiment_numeric = 0.9
+                        elif news_sentiment == 'positive': sentiment_numeric = 0.5
+                        elif news_sentiment == 'neutral': sentiment_numeric = 0.0
+                        elif news_sentiment == 'negative': sentiment_numeric = -0.5
+                        elif news_sentiment == 'very_negative': sentiment_numeric = -0.9
+                        
+                        # Create news analysis summary
+                        news_info = []
+                        
+                        # Add topics if available
+                        topics = news_analysis.get('topics', [])
+                        if topics:
+                            news_info.append(f"Key topics: {', '.join(topics[:5])}")
+                        
+                        # Add sentiment summary
+                        news_info.append(f"News sentiment: {news_sentiment.replace('_', ' ')} ({sentiment_score:.2f})")
+                        
+                        # Add entity summary if available
+                        entities = news_analysis.get('entities', [])
+                        if entities:
+                            entity_info = []
+                            for entity in entities[:3]:
+                                if 'text' in entity and 'type' in entity:
+                                    entity_info.append(f"{entity['text']} ({entity['type']})")
+                            if entity_info:
+                                news_info.append(f"Key entities: {', '.join(entity_info)}")
+                        
+                        # Add headlines
+                        headlines = []
+                        for item in news_analysis.get('news_items', [])[:3]:
+                            if 'title' in item and 'sentiment' in item:
+                                headlines.append(f"- {item['title']} ({item['sentiment']})")
+                        
+                        if headlines:
+                            news_info.append("Recent headlines:")
+                            news_info.extend(headlines)
+                        
+                        # Update social metrics with news analysis
+                        social_metrics['news_analysis'] = {
+                            'sentiment': news_sentiment,
+                            'sentiment_score': sentiment_score,
+                            'sentiment_numeric': sentiment_numeric,
+                            'topics': topics[:5] if topics else [],
+                            'entities': entities[:5] if entities else []
+                        }
+                        
+                        # Update recent news with more detailed info
+                        if news_info:
+                            social_metrics['recent_news'] = "\n".join(news_info)
+            except Exception as e:
+                logger.error(f"Error processing news analysis for {symbol}: {str(e)}")
 
             # Generate market context
             market_context = self.get_market_context(symbol)

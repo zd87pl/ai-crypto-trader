@@ -14,6 +14,9 @@ from services.feature_importance_analyzer import FeatureImportanceAnalyzer
 from services.social_risk_adjuster import SocialRiskAdjuster
 from services.monte_carlo_service import MonteCarloService
 from services.neural_network_service import NeuralNetworkService
+from services.pattern_recognition_service import PatternRecognitionService
+from services.news_analysis_service import NewsAnalysisService
+from services.enhanced_social_monitor_service import EnhancedSocialMonitorService
 
 def setup_logging():
     """Setup logging configuration"""
@@ -306,6 +309,366 @@ def print_status(trader, strategy_selector=None):
     
     except Exception as e:
         pass  # Silently ignore any errors here
+        
+    # Print chart pattern recognition data
+    try:
+        print("\nChart Pattern Recognition:")
+        print("-" * 80)
+        
+        # Get combined pattern analysis report
+        pattern_report = trader.redis.get('pattern_analysis_report')
+        
+        if pattern_report:
+            report_data = json.loads(pattern_report)
+            
+            # Only print if the data is recent (less than 30 minutes old)
+            if 'timestamp' in report_data:
+                report_time = datetime.fromisoformat(report_data['timestamp'])
+                if datetime.now() - report_time < timedelta(minutes=30):
+                    
+                    # Print summary statistics
+                    summary = report_data.get('summary', {})
+                    bullish = summary.get('bullish_patterns', 0)
+                    bearish = summary.get('bearish_patterns', 0)
+                    neutral = summary.get('neutral_patterns', 0)
+                    
+                    print(f"Patterns found: {bullish + bearish + neutral} (Bullish: {bullish}, Bearish: {bearish}, Neutral: {neutral})")
+                    
+                    # Print strongest signal if available
+                    strongest = summary.get('strongest_signal', (None, None))
+                    if strongest[0]:
+                        symbol, signal = strongest
+                        print(f"Strongest pattern: {symbol} - {signal['pattern'].replace('_', ' ').title()} (Strength: {signal['strength']:.2f})")
+                    
+                    # Print top pattern signals
+                    if 'signals' in report_data and report_data['signals']:
+                        signals = report_data['signals']
+                        sorted_signals = sorted(signals.items(), key=lambda x: x[1]['strength'], reverse=True)[:3]
+                        
+                        print("\nTop Pattern Signals:")
+                        print(f"{'Symbol':<10} {'Pattern':<25} {'Signal':<8} {'Strength':<10} {'Completion':<10}")
+                        print("-" * 80)
+                        
+                        for symbol, data in sorted_signals:
+                            pattern = data.get('pattern', 'unknown').replace('_', ' ').title()
+                            signal = data.get('signal', 'neutral').upper()
+                            strength = data.get('strength', 0)
+                            completion = data.get('completion', 0)
+                            
+                            # Add color/emoji based on signal
+                            signal_indicator = ""
+                            if signal == "BUY":
+                                signal_indicator = "🟢 BUY"
+                            elif signal == "SELL":
+                                signal_indicator = "🔴 SELL"
+                            else:
+                                signal_indicator = "⚪ HOLD"
+                            
+                            print(f"{symbol:<10} {pattern:<25} {signal_indicator:<8} {strength:<10.2f} {completion:<10}%")
+                else:
+                    print("No recent pattern data available")
+            else:
+                print("No pattern data available")
+        else:
+            # Check for individual pattern signals - at most 3 individual examples
+            displayed = 0
+            signals_shown = False
+            symbols = ["BTCUSDC", "ETHUSDC", "BNBUSDC"]  # Default symbols to check
+            
+            for symbol in symbols:
+                pattern_key = f"pattern:{symbol}"
+                pattern_json = trader.redis.get(pattern_key)
+                
+                if not pattern_json:
+                    continue
+                    
+                if not signals_shown:
+                    print("Recent Detected Patterns:")
+                    print(f"{'Symbol':<10} {'Pattern':<25} {'Confidence':<10} {'Completion':<10}")
+                    print("-" * 80)
+                    signals_shown = True
+                
+                pattern_data = json.loads(pattern_json)
+                
+                # Only show if data is recent (less than 30 minutes old)
+                pattern_time = datetime.fromisoformat(pattern_data.get('timestamp', '2000-01-01T00:00:00'))
+                if datetime.now() - pattern_time > timedelta(minutes=30):
+                    continue
+                    
+                pattern = pattern_data.get('primary_pattern', 'unknown').replace('_', ' ').title()
+                confidence = pattern_data.get('confidence', 0)
+                completion = pattern_data.get('completion_percentage', 0)
+                
+                print(f"{symbol:<10} {pattern:<25} {confidence:<10.2f} {completion:<10}%")
+                
+                displayed += 1
+                if displayed >= 3:
+                    break
+                    
+            if not signals_shown:
+                print("No pattern data available yet")
+    except Exception as e:
+        pass  # Silently ignore any errors here
+        
+    # Print news analysis data
+    try:
+        print("\nNews Analysis:")
+        print("-" * 80)
+        
+        # Get news summary report
+        news_report = trader.redis.get('news_summary_report')
+        
+        if news_report:
+            report_data = json.loads(news_report)
+            
+            # Only print if the data is recent (less than 30 minutes old)
+            if 'timestamp' in report_data:
+                report_time = datetime.fromisoformat(report_data['timestamp'])
+                if datetime.now() - report_time < timedelta(minutes=30):
+                    
+                    # Print overall market sentiment
+                    if 'market_sentiment' in report_data:
+                        sentiment = report_data['market_sentiment']
+                        sentiment_score = report_data.get('sentiment_score', 0)
+                        
+                        # Add emoji based on sentiment
+                        sentiment_emoji = "🟢" if sentiment_score > 0.6 else "🔴" if sentiment_score < 0.4 else "⚪"
+                        print(f"Market News Sentiment: {sentiment_emoji} {sentiment.title()} (Score: {sentiment_score:.2f})")
+                    
+                    # Print top news topics
+                    if 'top_topics' in report_data and report_data['top_topics']:
+                        topics = report_data['top_topics'][:3]  # Show top 3 topics
+                        print("Top News Topics:")
+                        for topic in topics:
+                            topic_name = topic.get('topic', '')
+                            topic_count = topic.get('count', 0)
+                            topic_sentiment = topic.get('sentiment', 0)
+                            
+                            # Add emoji based on sentiment
+                            topic_emoji = "🟢" if topic_sentiment > 0.6 else "🔴" if topic_sentiment < 0.4 else "⚪"
+                            print(f"- {topic_name} ({topic_count} articles): {topic_emoji} {topic_sentiment:.2f}")
+                    
+                    # Print asset-specific news
+                    if 'asset_news' in report_data and report_data['asset_news']:
+                        news_items = report_data['asset_news']
+                        print("\nAsset-Specific News Sentiment:")
+                        print(f"{'Symbol':<10} {'Sentiment':<15} {'Articles':<10} {'Top Entity':<20}")
+                        print("-" * 80)
+                        
+                        for symbol, data in sorted(news_items.items(), 
+                                                  key=lambda x: abs(x[1].get('sentiment_score', 0) - 0.5), 
+                                                  reverse=True)[:5]:  # Sort by most extreme sentiment and show top 5
+                            sentiment = data.get('sentiment', 'neutral').upper()
+                            sentiment_score = data.get('sentiment_score', 0.5)
+                            article_count = data.get('article_count', 0)
+                            
+                            # Get top entity if available
+                            top_entity = "N/A"
+                            if 'entities' in data and data['entities']:
+                                top_entity = data['entities'][0].get('entity', 'N/A')
+                            
+                            # Add emoji based on sentiment
+                            sentiment_emoji = "🟢" if sentiment_score > 0.6 else "🔴" if sentiment_score < 0.4 else "⚪"
+                            
+                            print(f"{symbol:<10} {sentiment_emoji} {sentiment:<12} {article_count:<10} {top_entity:<20}")
+                    
+                    # Print hot news summary if available
+                    if 'hot_news' in report_data and report_data['hot_news']:
+                        print("\nKey News Items:")
+                        for i, news in enumerate(report_data['hot_news'][:3]):  # Show top 3 news items
+                            title = news.get('title', 'N/A')
+                            source = news.get('source', 'N/A')
+                            sentiment = news.get('sentiment_score', 0.5)
+                            
+                            # Add emoji based on sentiment
+                            sentiment_emoji = "🟢" if sentiment > 0.6 else "🔴" if sentiment < 0.4 else "⚪"
+                            
+                            print(f"{i+1}. {title} ({source}) {sentiment_emoji}")
+                else:
+                    print("No recent news data available")
+            else:
+                print("No news data available")
+        else:
+            # Check for individual symbol news
+            displayed = 0
+            news_shown = False
+            symbols = ["BTCUSDC", "ETHUSDC", "BNBUSDC"]  # Default symbols to check
+            
+            for symbol in symbols:
+                # Convert symbol to base asset for news lookup (e.g., BTCUSDC -> BTC)
+                base_asset = symbol.replace("USDC", "").replace("USDT", "")
+                news_key = f"news:{base_asset}"
+                news_json = trader.redis.get(news_key)
+                
+                if not news_json:
+                    continue
+                    
+                if not news_shown:
+                    print("Recent News Analysis:")
+                    print(f"{'Asset':<10} {'Sentiment':<15} {'Articles':<10} {'Hot Topic':<20}")
+                    print("-" * 80)
+                    news_shown = True
+                
+                news_data = json.loads(news_json)
+                
+                # Only show if data is recent (less than 30 minutes old)
+                news_time = datetime.fromisoformat(news_data.get('timestamp', '2000-01-01T00:00:00'))
+                if datetime.now() - news_time > timedelta(minutes=30):
+                    continue
+                    
+                sentiment = news_data.get('sentiment', 'neutral').upper()
+                sentiment_score = news_data.get('sentiment_score', 0.5)
+                article_count = news_data.get('article_count', 0)
+                
+                # Get hot topic if available
+                hot_topic = "N/A"
+                if 'topics' in news_data and news_data['topics']:
+                    hot_topic = news_data['topics'][0].get('topic', 'N/A')
+                
+                # Add emoji based on sentiment
+                sentiment_emoji = "🟢" if sentiment_score > 0.6 else "🔴" if sentiment_score < 0.4 else "⚪"
+                
+                print(f"{base_asset:<10} {sentiment_emoji} {sentiment:<12} {article_count:<10} {hot_topic:<20}")
+                
+                displayed += 1
+                if displayed >= 3:
+                    break
+                    
+            if not news_shown:
+                print("No news analysis data available yet")
+    except Exception as e:
+        pass  # Silently ignore any errors here
+        
+    # Print enhanced social metrics data
+    try:
+        print("\nEnhanced Social Metrics:")
+        print("-" * 80)
+        
+        # Get social accuracy report
+        accuracy_report = trader.redis.get('social_accuracy_report')
+        
+        if accuracy_report:
+            report_data = json.loads(accuracy_report)
+            
+            # Only print if the data is recent (less than 12 hours old)
+            if 'timestamp' in report_data:
+                report_time = datetime.fromisoformat(report_data['timestamp'])
+                if datetime.now() - report_time < timedelta(hours=12):
+                    # Print overall accuracy metrics
+                    avg_accuracy = report_data.get('average_direction_accuracy', 0.0)
+                    total_symbols = report_data.get('total_symbols', 0)
+                    
+                    # Add emoji based on accuracy
+                    accuracy_emoji = "🟢" if avg_accuracy > 0.6 else "🔴" if avg_accuracy < 0.45 else "⚪"
+                    print(f"Social Metrics Prediction Accuracy: {accuracy_emoji} {avg_accuracy:.2f} (across {total_symbols} symbols)")
+                    
+                    # Print symbols with highest accuracy
+                    if 'symbols' in report_data and report_data['symbols']:
+                        print("\nTop Social Metrics Accuracy by Symbol:")
+                        print(f"{'Symbol':<10} {'Direction Acc.':<15} {'Correlation':<15} {'Optimal Lag':<15}")
+                        print("-" * 80)
+                        
+                        # Sort symbols by accuracy
+                        sorted_symbols = sorted(
+                            [(symbol, data) for symbol, data in report_data['symbols'].items()],
+                            key=lambda x: x[1].get('direction_accuracy', 0.0),
+                            reverse=True
+                        )[:5]  # Show top 5
+                        
+                        for symbol, data in sorted_symbols:
+                            direction_acc = data.get('direction_accuracy', 0.0)
+                            correlation = data.get('correlation', 0.0)
+                            optimal_lag = data.get('optimal_lag', 0)
+                            
+                            # Add emoji based on accuracy
+                            acc_emoji = "🟢" if direction_acc > 0.6 else "🔴" if direction_acc < 0.45 else "⚪"
+                            
+                            # Format optimal lag with direction
+                            if optimal_lag > 0:
+                                lag_str = f"+{optimal_lag}h (leads)"
+                            elif optimal_lag < 0:
+                                lag_str = f"{optimal_lag}h (lags)"
+                            else:
+                                lag_str = "0h (concurrent)"
+                            
+                            print(f"{symbol:<10} {acc_emoji} {direction_acc:.2f} {correlation:>14.2f} {lag_str:<15}")
+        
+        # Get performance report
+        performance_report = trader.redis.get('enhanced_social_monitor_performance')
+        
+        if performance_report:
+            perf_data = json.loads(performance_report)
+            
+            # Only print if the data is recent (less than 10 minutes old)
+            if 'timestamp' in perf_data:
+                report_time = datetime.fromisoformat(perf_data['timestamp'])
+                if datetime.now() - report_time < timedelta(minutes=10):
+                    print("\nSocial Monitor Performance:")
+                    print(f"Monitored symbols: {perf_data.get('monitored_symbols', 0)}")
+                    print(f"Anomalies detected: {perf_data.get('anomalies_detected', 0)}")
+                    print(f"Processing time: {perf_data.get('avg_processing_time', 0.0):.3f}s")
+                    
+        # Get enhanced social metrics for a few key symbols
+        symbols = ["BTCUSDC", "ETHUSDC", "BNBUSDC"]  # Default symbols to check
+        displayed = 0
+        metrics_shown = False
+        
+        for symbol in symbols:
+            metrics_key = f"enhanced_social_metrics:{symbol}"
+            metrics_json = trader.redis.get(metrics_key)
+            
+            if not metrics_json:
+                # Try the regular key for backward compatibility
+                metrics_json = trader.redis.hget('enhanced_social_metrics', symbol)
+                
+            if not metrics_json:
+                continue
+                
+            if not metrics_shown:
+                print("\nEnhanced Social Sentiment:")
+                print(f"{'Symbol':<10} {'Raw':<10} {'Enhanced':<10} {'Lead/Lag':<15} {'Anomaly':<10}")
+                print("-" * 80)
+                metrics_shown = True
+            
+            metrics_data = json.loads(metrics_json)
+            
+            # Only show if data is recent (less than 15 minutes old)
+            metrics_time = datetime.fromisoformat(metrics_data.get('timestamp', '2000-01-01T00:00:00'))
+            if datetime.now() - metrics_time > timedelta(minutes=15):
+                continue
+                
+            # Get sentiment data
+            enhanced_sentiment = metrics_data.get('enhanced_sentiment', {})
+            raw_sentiment = enhanced_sentiment.get('raw_sentiment', 0.5)
+            enhanced_sentiment_value = enhanced_sentiment.get('enhanced_sentiment', 0.5)
+            optimal_lag = enhanced_sentiment.get('optimal_lag', 0)
+            is_anomaly = enhanced_sentiment.get('is_anomaly', False)
+            
+            # Format optimal lag with direction
+            if optimal_lag > 0:
+                lag_str = f"+{optimal_lag}h (leads)"
+            elif optimal_lag < 0:
+                lag_str = f"{optimal_lag}h (lags)"
+            else:
+                lag_str = "0h"
+            
+            # Add emoji based on sentiment
+            raw_emoji = "🟢" if raw_sentiment > 0.6 else "🔴" if raw_sentiment < 0.4 else "⚪"
+            enhanced_emoji = "🟢" if enhanced_sentiment_value > 0.6 else "🔴" if enhanced_sentiment_value < 0.4 else "⚪"
+            
+            # Format symbol (strip USDC/USDT)
+            display_symbol = symbol.replace("USDC", "").replace("USDT", "")
+            
+            print(f"{display_symbol:<10} {raw_emoji} {raw_sentiment:.2f} {enhanced_emoji} {enhanced_sentiment_value:.2f} {lag_str:<15} {'⚠️ Yes' if is_anomaly else 'No':<10}")
+            
+            displayed += 1
+            if displayed >= 5:  # Limit to 5 symbols
+                break
+                
+        if not metrics_shown:
+            print("No enhanced social metrics data available yet")
+    except Exception as e:
+        pass  # Silently ignore any errors here
 
 async def run_strategy_selection_service():
     """Run the strategy selection service"""
@@ -340,6 +703,21 @@ async def run_monte_carlo_service():
 async def run_neural_network_service():
     """Run the neural network price prediction service"""
     service = NeuralNetworkService()
+    await service.run()
+    
+async def run_pattern_recognition_service():
+    """Run the pattern recognition service"""
+    service = PatternRecognitionService()
+    await service.run()
+    
+async def run_news_analysis_service():
+    """Run the news analysis service"""
+    service = NewsAnalysisService()
+    await service.run()
+    
+async def run_enhanced_social_monitor_service():
+    """Run the enhanced social monitor service"""
+    service = EnhancedSocialMonitorService()
     await service.run()
 
 def run_async_service(async_func):
@@ -420,6 +798,33 @@ def main():
         )
         neural_network_thread.start()
         logging.info("Neural Network price prediction service started")
+        
+        # Start Pattern Recognition service in a separate thread
+        pattern_recognition_thread = threading.Thread(
+            target=run_async_service,
+            args=(run_pattern_recognition_service,),
+            daemon=True
+        )
+        pattern_recognition_thread.start()
+        logging.info("Pattern Recognition service started")
+        
+        # Start News Analysis service in a separate thread
+        news_analysis_thread = threading.Thread(
+            target=run_async_service,
+            args=(run_news_analysis_service,),
+            daemon=True
+        )
+        news_analysis_thread.start()
+        logging.info("News Analysis service started")
+        
+        # Start Enhanced Social Monitor service in a separate thread
+        enhanced_social_thread = threading.Thread(
+            target=run_async_service,
+            args=(run_enhanced_social_monitor_service,),
+            daemon=True
+        )
+        enhanced_social_thread.start()
+        logging.info("Enhanced Social Monitor service started")
         
         # Small delay to allow services to initialize
         time.sleep(3)

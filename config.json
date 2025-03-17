@@ -113,8 +113,8 @@
         "model": "gpt-4o",
         "temperature": 0.7,
         "max_tokens": 2000,
-        "analysis_prompt": "As a cryptocurrency trading expert, analyze the market conditions for {symbol} with:\n\nPrice Action:\nPrice: ${price:.8f}\n24h Volume: ${volume:.2f}\n1m Change: {price_change_1m:.2f}%\n3m Change: {price_change_3m:.2f}%\n5m Change: {price_change_5m:.2f}%\n15m Change: {price_change_15m:.2f}%\n\nTechnical Indicators:\n- RSI: {rsi:.2f}\n- Stochastic K: {stoch:.2f}\n- MACD: {macd:.8f}\n- Williams %R: {williams_r:.2f}\n- Bollinger Band Position: {bb_position:.4f}\n\nMarket Trend:\n- Direction: {trend}\n- Strength: {trend_strength:.4f}\n\nCombined Indicators:\n{combined_indicators[summary]}\n\nSocial Metrics:\n- Volume: {social_volume}\n- Engagement: {social_engagement}\n- Contributors: {social_contributors}\n- Sentiment: {social_sentiment}\n\nRecent News:\n{recent_news}\n\nMarket Context:\n{market_context}\n\nProvide a trading decision based on:\n1. Price action and momentum indicators\n2. Trend analysis and technical indicators\n3. Combined indicator signals\n4. Social sentiment and news impact\n5. Volume analysis\n6. Risk assessment\n\nRespond with a JSON object containing:\n- decision: 'BUY', 'SELL', or 'HOLD'\n- confidence: value between 0 and 1\n- reasoning: detailed explanation of the analysis\n- risk_level: 'LOW', 'MEDIUM', or 'HIGH'\n- key_indicators: list of most influential indicators for this decision",
-        "explainable_analysis_prompt": "As a cryptocurrency trading expert, analyze the market conditions for {symbol} with:\n\nPrice Action:\nPrice: ${price:.8f}\n24h Volume: ${volume:.2f}\n1m Change: {price_change_1m:.2f}%\n3m Change: {price_change_3m:.2f}%\n5m Change: {price_change_5m:.2f}%\n15m Change: {price_change_15m:.2f}%\n\nTechnical Indicators:\n- RSI: {rsi:.2f}\n- Stochastic K: {stoch:.2f}\n- MACD: {macd:.8f}\n- Williams %R: {williams_r:.2f}\n- Bollinger Band Position: {bb_position:.4f}\n\nMarket Trend:\n- Direction: {trend}\n- Strength: {trend_strength:.4f}\n\nCombined Indicators:\n{combined_indicators[summary]}\n\nSocial Metrics:\n- Volume: {social_volume}\n- Engagement: {social_engagement}\n- Contributors: {social_contributors}\n- Sentiment: {social_sentiment}\n\nRecent News:\n{recent_news}\n\nMarket Context:\n{market_context}\n\nProvide a detailed trading analysis based on:\n1. Price action and momentum indicators\n2. Trend analysis and technical indicators\n3. Combined indicator signals\n4. Social sentiment and news impact\n5. Volume analysis\n6. Risk assessment\n\nRespond with a JSON object containing:\n- decision: 'BUY', 'SELL', or 'HOLD'\n- confidence: value between 0 and 1\n- reasoning: detailed explanation of the analysis\n- risk_level: 'LOW', 'MEDIUM', or 'HIGH'\n- key_indicators: list of most influential indicators for this decision\n- explanation: {\n  \"summary\": \"concise explanation of the decision\",\n  \"technical_factors\": \"detailed explanation of technical analysis factors\",\n  \"social_factors\": \"detailed explanation of social metrics impact\",\n  \"key_indicators\": [\"list of key indicators that influenced the decision\"],\n  \"risk_assessment\": \"detailed risk assessment\"\n}\n- factor_weights: {\n  \"technical_indicators\": {\n    \"rsi\": value between 0 and 1,\n    \"macd\": value between 0 and 1,\n    \"bollinger_bands\": value between 0 and 1,\n    \"price_action\": value between 0 and 1,\n    \"other\": value between 0 and 1\n  },\n  \"price_action\": {\n    \"momentum\": value between 0 and 1,\n    \"volatility\": value between 0 and 1,\n    \"volume\": value between 0 and 1\n  },\n  \"social_metrics\": {\n    \"sentiment\": value between 0 and 1,\n    \"volume\": value between 0 and 1,\n    \"engagement\": value between 0 and 1\n  },\n  \"market_context\": value between 0 and 1\n}",
+        "analysis_prompt": "As a cryptocurrency trading expert, analyze the market conditions for {symbol} with:\n\nPrice Action:\nPrice: ${price:.8f}\n24h Volume: ${volume:.2f}\n1m Change: {price_change_1m:.2f}%\n3m Change: {price_change_3m:.2f}%\n5m Change: {price_change_5m:.2f}%\n15m Change: {price_change_15m:.2f}%\n\nTechnical Indicators:\n- RSI: {rsi:.2f}\n- Stochastic K: {stoch:.2f}\n- MACD: {macd:.8f}\n- Williams %R: {williams_r:.2f}\n- Bollinger Band Position: {bb_position:.4f}\n\nMarket Trend:\n- Direction: {trend}\n- Strength: {trend_strength:.4f}\n\nCombined Indicators:\n{combined_indicators[summary]}\n\nSocial Metrics:\n- Volume: {social_volume}\n- Engagement: {social_engagement}\n- Contributors: {social_contributors}\n- Sentiment: {social_sentiment}\n\nNews Analysis:\n{recent_news}\n\nMarket Context:\n{market_context}\n\nProvide a trading decision based on:\n1. Price action and momentum indicators\n2. Trend analysis and technical indicators\n3. Combined indicator signals\n4. Social sentiment and news impact\n5. Volume analysis\n6. Risk assessment\n7. News sentiment and key topics\n\nRespond with a JSON object containing:\n- decision: 'BUY', 'SELL', or 'HOLD'\n- confidence: value between 0 and 1\n- reasoning: detailed explanation of the analysis\n- risk_level: 'LOW', 'MEDIUM', or 'HIGH'\n- key_indicators: list of most influential indicators for this decision",
+        "explainable_analysis_prompt": "As a cryptocurrency trading expert, analyze the market conditions for {symbol} with:\n\nPrice Action:\nPrice: ${price:.8f}\n24h Volume: ${volume:.2f}\n1m Change: {price_change_1m:.2f}%\n3m Change: {price_change_3m:.2f}%\n5m Change: {price_change_5m:.2f}%\n15m Change: {price_change_15m:.2f}%\n\nTechnical Indicators:\n- RSI: {rsi:.2f}\n- Stochastic K: {stoch:.2f}\n- MACD: {macd:.8f}\n- Williams %R: {williams_r:.2f}\n- Bollinger Band Position: {bb_position:.4f}\n\nMarket Trend:\n- Direction: {trend}\n- Strength: {trend_strength:.4f}\n\nCombined Indicators:\n{combined_indicators[summary]}\n\nSocial Metrics:\n- Volume: {social_volume}\n- Engagement: {social_engagement}\n- Contributors: {social_contributors}\n- Sentiment: {social_sentiment}\n\nNews Analysis:\n{recent_news}\n\nMarket Context:\n{market_context}\n\nProvide a detailed trading analysis based on:\n1. Price action and momentum indicators\n2. Trend analysis and technical indicators\n3. Combined indicator signals\n4. Social sentiment and news impact\n5. Volume analysis\n6. Risk assessment\n7. News sentiment and topics\n\nRespond with a JSON object containing:\n- decision: 'BUY', 'SELL', or 'HOLD'\n- confidence: value between 0 and 1\n- reasoning: detailed explanation of the analysis\n- risk_level: 'LOW', 'MEDIUM', or 'HIGH'\n- key_indicators: list of most influential indicators for this decision\n- explanation: {\n  \"summary\": \"concise explanation of the decision\",\n  \"technical_factors\": \"detailed explanation of technical analysis factors\",\n  \"social_factors\": \"detailed explanation of social metrics impact\",\n  \"news_analysis\": \"detailed explanation of news and its impact\",\n  \"key_indicators\": [\"list of key indicators that influenced the decision\"],\n  \"risk_assessment\": \"detailed risk assessment\"\n}\n- factor_weights: {\n  \"technical_indicators\": {\n    \"rsi\": value between 0 and 1,\n    \"macd\": value between 0 and 1,\n    \"bollinger_bands\": value between 0 and 1,\n    \"price_action\": value between 0 and 1,\n    \"other\": value between 0 and 1\n  },\n  \"price_action\": {\n    \"momentum\": value between 0 and 1,\n    \"volatility\": value between 0 and 1,\n    \"volume\": value between 0 and 1\n  },\n  \"social_metrics\": {\n    \"sentiment\": value between 0 and 1,\n    \"volume\": value between 0 and 1,\n    \"engagement\": value between 0 and 1\n  },\n  \"news_analysis\": {\n    \"sentiment\": value between 0 and 1,\n    \"relevance\": value between 0 and 1,\n    \"recency\": value between 0 and 1\n  },\n  \"market_context\": value between 0 and 1\n}",
         "risk_prompt": "Analyze risk and position sizing for {symbol} trade with:\n\nAvailable Capital: ${capital:.2f}\nVolatility: {volatility:.2f}\nCurrent Price: ${price:.8f}\nTrend Strength: {trend_strength:.4f}\n\nProvide a JSON response with:\n- position_size: recommended position size as a decimal (0-1)\n- stop_loss_pct: recommended stop loss percentage\n- take_profit_pct: recommended take profit percentage\n- reasoning: detailed explanation of the recommendations",
         "market_prompt": "Analyze overall market conditions based on the following data:\n\n{market_data}\n\nProvide a JSON response with:\n- market_sentiment: 'BULLISH', 'BEARISH', or 'NEUTRAL'\n- top_opportunities: list of symbols with highest potential\n- risks: list of current market risks\n- reasoning: detailed explanation of the analysis",
         "explainable_market_prompt": "Analyze overall market conditions based on the following data:\n\n{market_data}\n\nProvide a comprehensive analysis with the following JSON structure:\n- market_sentiment: 'BULLISH', 'BEARISH', or 'NEUTRAL'\n- top_opportunities: list of symbols with highest potential\n- risks: list of current market risks\n- reasoning: detailed explanation of the analysis\n- explanation: {\n  \"summary\": \"concise summary of market conditions\",\n  \"market_factors\": \"detailed explanation of key market factors\",\n  \"key_trends\": [\"list of important market trends\"],\n  \"risk_factors\": [\"list of risk factors to watch\"],\n  \"sentiment_indicators\": [\"key sentiment indicators influencing the market\"],\n  \"recommendation_rationale\": \"rationale for the top opportunities\"\n}\n- factor_weights: {\n  \"price_action\": value between 0 and 1,\n  \"technical_indicators\": value between 0 and 1,\n  \"volume_analysis\": value between 0 and 1,\n  \"social_sentiment\": value between 0 and 1,\n  \"market_trends\": value between 0 and 1\n}"
@@ -151,6 +151,58 @@
         "cache_duration": 300,
         "max_news_age": 3600,
         "min_engagement": 1000
+    },
+    "enhanced_social_metrics": {
+        "enabled": true,
+        "update_interval": 300,
+        "anomaly_detection": {
+            "enabled": true,
+            "contamination": 0.05,
+            "threshold": 3.0,
+            "min_training_samples": 10,
+            "model_update_interval": 86400
+        },
+        "sentiment_analysis": {
+            "time_weighting": {
+                "enabled": true,
+                "decay_mode": "medium",
+                "half_life_hours": 4
+            },
+            "source_weights": {
+                "twitter": 0.35,
+                "reddit": 0.30,
+                "news": 0.25,
+                "telegram": 0.10
+            },
+            "adaptive_weights": {
+                "enabled": true,
+                "update_interval": 43200,
+                "min_direction_accuracy": 0.55
+            }
+        },
+        "lead_lag_analysis": {
+            "enabled": true,
+            "max_lag_hours": 24,
+            "min_correlation": 0.2,
+            "update_interval": 86400,
+            "lookback_days": 30
+        },
+        "accuracy_assessment": {
+            "enabled": true,
+            "update_interval": 43200,
+            "metrics": [
+                "direction_accuracy",
+                "correlation",
+                "r2",
+                "information_coefficient"
+            ],
+            "max_symbols": 10
+        },
+        "performance_monitoring": {
+            "enabled": true,
+            "report_interval": 300,
+            "max_processing_time": 5.0
+        }
     },
     "evolution": {
         "min_sharpe_ratio": 1.2,
@@ -444,6 +496,142 @@
                 "max_mae_percent": 2.0
             },
             "evaluation_interval": 43200
+        }
+    },
+    "pattern_recognition": {
+        "enabled": true,
+        "model_type": "cnn_lstm",
+        "sequence_length": 60,
+        "analysis_interval": 300,
+        "confidence_threshold": 0.6,
+        "create_visualizations": true,
+        "service_port": 8011,
+        "pattern_detection_threshold": 0.5,
+        "integration": {
+            "trade_signal_weight": 0.4,
+            "integrate_with_other_signals": true,
+            "volume_confirmation_required": true,
+            "trigger_alerts": true
+        },
+        "supported_patterns": [
+            "head_and_shoulders",
+            "inverse_head_and_shoulders",
+            "double_top",
+            "double_bottom",
+            "ascending_triangle",
+            "descending_triangle",
+            "symmetric_triangle",
+            "rectangle",
+            "flag_bull",
+            "flag_bear",
+            "pennant",
+            "cup_and_handle",
+            "rising_wedge",
+            "falling_wedge"
+        ],
+        "model_architectures": {
+            "cnn": {
+                "num_conv_layers": 3,
+                "filters": [32, 64, 128],
+                "kernel_size": 3
+            },
+            "lstm": {
+                "num_units": 64,
+                "num_layers": 2,
+                "bidirectional": false
+            },
+            "cnn_lstm": {
+                "cnn_filters": [32, 64],
+                "kernel_size": 3,
+                "lstm_units": 64,
+                "lstm_layers": 2
+            }
+        },
+        "training": {
+            "batch_size": 32,
+            "epochs": 100,
+            "learning_rate": 0.001,
+            "early_stopping_patience": 10,
+            "validation_split": 0.2
+        }
+    },
+    "news_analysis": {
+        "enabled": true,
+        "update_interval": 300,
+        "service_port": 8012,
+        "max_news_age_hours": 24,
+        "sentiment_analysis": {
+            "vader_enabled": true,
+            "transformer_enabled": true,
+            "transformer_model": "finiteautomata/bertweet-base-sentiment-analysis",
+            "fallback_to_vader": true,
+            "sentiment_thresholds": {
+                "bullish": 0.65,
+                "bearish": 0.35
+            }
+        },
+        "entity_extraction": {
+            "enabled": true,
+            "min_entity_frequency": 2,
+            "max_entities_per_asset": 10
+        },
+        "topic_extraction": {
+            "enabled": true,
+            "num_topics": 5,
+            "min_topic_coherence": 0.3,
+            "max_topics_per_asset": 3
+        },
+        "news_sources": {
+            "cryptopanic": {
+                "enabled": true,
+                "api_key": "",
+                "endpoint": "https://cryptopanic.com/api/v1/posts/",
+                "max_results": 50,
+                "min_score": 0
+            },
+            "lunarcrush": {
+                "enabled": true,
+                "use_existing_client": true,
+                "max_news_items": 30
+            },
+            "coindesk": {
+                "enabled": true,
+                "rss_feed": "https://www.coindesk.com/arc/outboundfeeds/rss/"
+            },
+            "cointelegraph": {
+                "enabled": true,
+                "rss_feed": "https://cointelegraph.com/rss"
+            }
+        },
+        "summarization": {
+            "enabled": true,
+            "max_summary_length": 200,
+            "method": "extractive",
+            "top_n_sentences": 3
+        },
+        "market_impact": {
+            "relevance_weight": 0.3,
+            "recency_weight": 0.3,
+            "sentiment_weight": 0.4,
+            "source_weights": {
+                "cryptopanic": 0.3,
+                "lunarcrush": 0.3,
+                "coindesk": 0.2,
+                "cointelegraph": 0.2
+            },
+            "default_impact_half_life_hours": 6
+        },
+        "visualization": {
+            "enabled": true,
+            "max_datapoints": 100,
+            "chart_types": ["sentiment_timeline", "entity_network", "topic_heatmap"]
+        },
+        "monitored_symbols": ["BTC", "ETH", "BNB", "XRP", "SOL", "ADA"],
+        "advanced_features": {
+            "relevance_scoring": true,
+            "trend_detection": true,
+            "anomaly_detection": true,
+            "entity_relation_mapping": true
         }
     }
 }
