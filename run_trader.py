@@ -10,6 +10,7 @@ from auto_trader import AutoTrader
 from services.strategy_selection_service import StrategySelectionService
 from services.market_regime_service import MarketRegimeService
 from services.social_strategy_integrator import SocialStrategyIntegrator
+from services.feature_importance_service import FeatureImportanceService
 
 def setup_logging():
     """Setup logging configuration"""
@@ -116,6 +117,39 @@ def print_status(trader, strategy_selector=None):
                         print(f"- {factor}: {score:.4f}")
     except Exception as e:
         pass  # Silently ignore any errors here
+        
+    # Print feature importance information if available
+    try:
+        feature_importance = trader.redis.get('feature_importance')
+        if feature_importance:
+            importance_data = json.loads(feature_importance)
+            
+            # Only print if the data is recent (less than 1 hour old)
+            importance_time = datetime.fromisoformat(importance_data['timestamp'])
+            if datetime.now() - importance_time < timedelta(hours=1):
+                print("\nFeature Importance Analysis:")
+                print("-" * 80)
+                
+                # Print top 5 most important features for trading success
+                if 'classification' in importance_data:
+                    # Sort features by importance
+                    features = [(k, v) for k, v in importance_data['classification'].items()]
+                    sorted_features = sorted(features, key=lambda x: x[1], reverse=True)[:5]
+                    
+                    print("Top 5 features for trade success prediction:")
+                    for feature, importance in sorted_features:
+                        print(f"- {feature}: {importance:.4f}")
+                
+                # Print feature group importance if available
+                if 'feature_groups' in importance_data:
+                    print("\nFeature Group Importance:")
+                    groups = importance_data['feature_groups']
+                    for group, data in sorted(groups.items(), 
+                                              key=lambda x: x[1]['classification'], 
+                                              reverse=True):
+                        print(f"- {group}: {data['classification']:.4f}")
+    except Exception as e:
+        pass  # Silently ignore any errors here
 
 async def run_strategy_selection_service():
     """Run the strategy selection service"""
@@ -130,6 +164,11 @@ async def run_market_regime_service():
 async def run_social_strategy_service():
     """Run the social strategy integrator service"""
     service = SocialStrategyIntegrator()
+    await service.run()
+
+async def run_feature_importance_service():
+    """Run the feature importance analysis service"""
+    service = FeatureImportanceService()
     await service.run()
 
 def run_async_service(async_func):
@@ -174,6 +213,15 @@ def main():
         )
         social_thread.start()
         logging.info("Social strategy integrator service started")
+        
+        # Start feature importance analysis service in a separate thread
+        feature_importance_thread = threading.Thread(
+            target=run_async_service,
+            args=(run_feature_importance_service,),
+            daemon=True
+        )
+        feature_importance_thread.start()
+        logging.info("Feature importance analysis service started")
         
         # Small delay to allow services to initialize
         time.sleep(3)

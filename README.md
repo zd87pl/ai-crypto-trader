@@ -149,7 +149,15 @@ python dashboard.py
 - Explains the reasoning behind each trade
 - Logs to: `logs/ai_explainability.log`
 
-### 12. Portfolio Risk Management Service
+### 12. Feature Importance Service
+- Analyzes the importance of different features in trading decisions
+- Uses machine learning to identify most influential factors
+- Provides visualizations of feature importance
+- Tracks feature importance over time
+- Helps optimize trading models and strategies
+- Logs to: `logs/feature_importance.log`
+
+### 13. Portfolio Risk Management Service
 - Implements portfolio-wide risk management
 - Calculates Value at Risk (VaR) across the entire portfolio
 - Provides adaptive stop-losses based on market volatility

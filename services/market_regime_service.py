@@ -1,6 +1,5 @@
 import os
 import json
-import redis
 import asyncio
 import logging as logger
 import numpy as np
@@ -9,17 +8,40 @@ from typing import Dict, List, Tuple, Optional, Union, Any
 from datetime import datetime, timedelta
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import train_test_split
 from dotenv import load_dotenv
+from logging.handlers import RotatingFileHandler
+from redis.asyncio import Redis
+from redis.exceptions import ConnectionError
+import pickle
+import matplotlib.pyplot as plt
+import io
+import base64
 
-# Load environment variables
-load_dotenv()
+# Import our custom utility classes
+from services.utils.market_regime_detector import MarketRegimeDetector
+from services.utils.market_regime_data_collector import MarketRegimeDataCollector
+
+# Create logs directory if it doesn't exist
+os.makedirs('logs', exist_ok=True)
+
+# Configure rotating file handler
+rotating_handler = RotatingFileHandler(
+    'logs/market_regime.log',
+    maxBytes=10*1024*1024,  # 10MB per file
+    backupCount=5,  # Keep 5 backup files
+    encoding='utf-8'
+)
 
 # Configure logging
 logger.basicConfig(
     level=logger.INFO,
     format='%(asctime)s - %(levelname)s - [MarketRegime] %(message)s',
     handlers=[
-        logger.FileHandler('logs/market_regime.log'),
+        rotating_handler,
         logger.StreamHandler()
     ]
 )
@@ -33,30 +55,39 @@ class MarketRegimeService:
     - Bear market (strong downtrend)
     - Sideways/Ranging market (low volatility, no clear trend)
     - Volatile market (high volatility, possibly with rapid trend changes)
+    
+    This service uses various machine learning approaches for market regime detection:
+    1. Clustering-based: KMeans, GMM
+    2. Hidden Markov Models
+    3. Supervised classification (when labels are available)
     """
     
     def __init__(self):
+        logger.debug("Initializing Market Regime Service...")
+        
         # Load configuration
         with open('config.json', 'r') as f:
             self.config = json.load(f)
+        logger.debug(f"Loaded configuration")
         
-        # Initialize Redis connection
-        self.redis = redis.Redis(
-            host=os.getenv('REDIS_HOST', 'redis'),
-            port=int(os.getenv('REDIS_PORT', 6379)),
-            decode_responses=True
-        )
-        
-        # Service state
+        # Initialize data structures
         self.running = True
         self.current_regime = None
         self.regime_history = []
-        self.regime_change_threshold = float(os.getenv('REGIME_CHANGE_THRESHOLD', '0.7'))
-        self.check_interval = int(os.getenv('REGIME_CHECK_INTERVAL', '3600'))  # Default: check every hour
-        
-        # Strategy selection parameters
         self.strategy_performance_history = {}
         self.regime_strategy_mapping = {}
+        
+        # Redis configuration
+        self.redis_host = os.getenv('REDIS_HOST', 'redis')
+        self.redis_port = int(os.getenv('REDIS_PORT', 6379))
+        logger.debug(f"Redis configuration - Host: {self.redis_host}, Port: {self.redis_port}")
+        
+        # Redis will be initialized in connect_redis
+        self.redis = None
+        
+        # Load configuration parameters
+        self.regime_change_threshold = float(os.getenv('REGIME_CHANGE_THRESHOLD', '0.7'))
+        self.check_interval = int(os.getenv('REGIME_CHECK_INTERVAL', '3600'))  # Default: check every hour
         
         # Market regime detection parameters
         self.lookback_periods = {
@@ -65,7 +96,7 @@ class MarketRegimeService:
             'long': int(os.getenv('REGIME_LONG_LOOKBACK', '168'))       # 7 days
         }
         
-        # Regime detection thresholds
+        # Traditional regime detection thresholds (still used as fallback)
         self.regime_thresholds = {
             'bull': {
                 'trend_strength': float(os.getenv('BULL_TREND_STRENGTH', '0.6')),
@@ -86,13 +117,296 @@ class MarketRegimeService:
             }
         }
         
-        # Cached market data for regime detection
+        # Service port
+        self.service_port = int(os.getenv('MARKET_REGIME_PORT', 8006))
+        logger.debug(f"Service port configured as: {self.service_port}")
+        
+        # Default market data and settings
         self.market_data_cache = []
+        self.primary_symbol = os.getenv('PRIMARY_TRADING_SYMBOL', 'BTCUSDC')
+        self.primary_timeframe = os.getenv('PRIMARY_TIMEFRAME', '1h')
+        
+        # Detection method configuration
+        self.detection_method = os.getenv('REGIME_DETECTION_METHOD', 'ml')  # 'traditional', 'ml', or 'hybrid'
+        self.ml_method = os.getenv('ML_REGIME_METHOD', 'kmeans')  # 'kmeans', 'gmm', 'hmm', 'supervised'
+        
+        # Initialize ML components (will be set up after Redis connection)
+        self.regime_detector = None
+        self.data_collector = None
+        self.trained_models = {}
+        
+        # Model configuration
+        self.model_config = {
+            'method': self.ml_method,
+            'window_size': int(os.getenv('ML_WINDOW_SIZE', '30')),
+            'n_regimes': 4,  # Default: bull, bear, ranging, volatile
+            'features': [
+                'return', 'volatility', 'trend_strength', 'rsi', 
+                'macd', 'bb_width', 'adx', 'cci'
+            ]
+        }
+        
+        # Model training settings
+        self.model_training_interval = int(os.getenv('MODEL_TRAINING_INTERVAL', '86400'))  # Default: once per day
+        self.last_training_time = datetime.min
+        self.min_training_samples = int(os.getenv('MIN_TRAINING_SAMPLES', '100'))
+        
+        # Model path for saving/loading
+        self.model_dir = os.getenv('MODEL_DIR', 'models')
+        os.makedirs(self.model_dir, exist_ok=True)
         
         logger.info("Market Regime Service initialized with the following parameters:")
+        logger.info(f"- Detection Method: {self.detection_method} (ML Method: {self.ml_method})")
         logger.info(f"- Regime Change Threshold: {self.regime_change_threshold}")
         logger.info(f"- Check Interval: {self.check_interval} seconds")
         logger.info(f"- Lookback Periods: {self.lookback_periods}")
+        logger.info(f"- Primary Trading Symbol: {self.primary_symbol}")
+    
+    async def connect_redis(self, max_retries=10, retry_delay=5):
+        """Establish Redis connection with retries."""
+        retries = 0
+        while retries < max_retries and self.running:
+            try:
+                if self.redis is None:
+                    logger.debug(f"Attempting Redis connection (attempt {retries + 1}/{max_retries})")
+                    self.redis = Redis(
+                        host=self.redis_host,
+                        port=self.redis_port,
+                        decode_responses=True,
+                        socket_connect_timeout=5.0,
+                        socket_keepalive=True,
+                        health_check_interval=15
+                    )
+                await self.redis.ping()
+                logger.info(f"Successfully connected to Redis at {self.redis_host}:{self.redis_port}")
+                return True
+            except (ConnectionError, OSError) as e:
+                retries += 1
+                logger.error(f"Failed to connect to Redis (attempt {retries}/{max_retries}): {str(e)}")
+                if self.redis:
+                    await self.redis.close()
+                    self.redis = None
+                if retries < max_retries:
+                    await asyncio.sleep(retry_delay)
+                else:
+                    logger.error("Max retries reached. Could not connect to Redis.")
+                    return False
+            except Exception as e:
+                logger.error(f"Unexpected error connecting to Redis: {str(e)}")
+                if self.redis:
+                    await self.redis.close()
+                    self.redis = None
+                await asyncio.sleep(retry_delay)
+                retries += 1
+    
+    async def initialize_ml_components(self):
+        """Initialize ML components for market regime detection."""
+        try:
+            # Initialize data collector
+            self.data_collector = MarketRegimeDataCollector(self.redis)
+            
+            # Initialize regime detector
+            self.regime_detector = MarketRegimeDetector(self.model_config)
+            
+            # Try to load existing model
+            model_path = os.path.join(self.model_dir, f"market_regime_{self.ml_method}.pkl")
+            if os.path.exists(model_path):
+                if self.regime_detector.load_model(model_path):
+                    logger.info(f"Loaded existing {self.ml_method} model from {model_path}")
+                else:
+                    logger.warning(f"Failed to load model from {model_path}, will train a new model")
+            else:
+                logger.info(f"No existing model found at {model_path}, will train a new model")
+            
+            # Train models if needed
+            await self.train_regime_models()
+            
+            logger.info("ML components initialized successfully")
+            return True
+        
+        except Exception as e:
+            logger.error(f"Error initializing ML components: {str(e)}")
+            return False
+            
+    async def train_regime_models(self):
+        """Train ML models for market regime detection."""
+        try:
+            # Check if training is needed
+            current_time = datetime.now()
+            time_since_training = (current_time - self.last_training_time).total_seconds()
+            
+            # Skip if trained recently and model exists
+            if (time_since_training < self.model_training_interval and 
+                self.regime_detector and self.regime_detector.is_trained):
+                logger.debug(f"Skipping model training, last trained {time_since_training:.1f}s ago")
+                return True
+                
+            # Collect training data
+            logger.info(f"Collecting training data for {self.primary_symbol}...")
+            dataset = await self.data_collector.prepare_regime_detection_dataset(
+                symbol=self.primary_symbol,
+                timeframe=self.primary_timeframe,
+                lookback_days=self.lookback_periods['long'] // 24  # Convert hours to days
+            )
+            
+            if not dataset or 'price_data' not in dataset:
+                logger.warning("No price data available for training")
+                return False
+                
+            price_data = dataset['price_data']
+            
+            if len(price_data) < self.min_training_samples:
+                logger.warning(f"Insufficient data for model training: {len(price_data)} samples")
+                return False
+                
+            # Train the model
+            logger.info(f"Training {self.ml_method} model on {len(price_data)} samples...")
+            success = self.regime_detector.train(price_data)
+            
+            if success:
+                self.last_training_time = current_time
+                
+                # Save the model
+                model_path = os.path.join(self.model_dir, f"market_regime_{self.ml_method}.pkl")
+                if self.regime_detector.save_model(model_path):
+                    logger.info(f"Model saved to {model_path}")
+                    
+                logger.info(f"Successfully trained {self.ml_method} model")
+                return True
+            else:
+                logger.error(f"Failed to train {self.ml_method} model")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error training regime models: {str(e)}")
+            return False
+            
+    async def detect_regime_with_ml(self):
+        """Detect market regime using machine learning models."""
+        try:
+            if not self.regime_detector or not self.regime_detector.is_trained:
+                logger.warning("ML regime detector not trained, cannot detect regime with ML")
+                return "unknown"
+                
+            # Get recent market data
+            dataset = await self.data_collector.prepare_regime_detection_dataset(
+                symbol=self.primary_symbol,
+                timeframe=self.primary_timeframe,
+                lookback_days=7  # Use recent data for detection
+            )
+            
+            if not dataset or 'price_data' not in dataset:
+                logger.warning("No recent price data available for regime detection")
+                return "unknown"
+                
+            price_data = dataset['price_data']
+            
+            if len(price_data) < self.model_config['window_size']:
+                logger.warning(f"Insufficient recent data for regime detection: {len(price_data)} samples")
+                return "unknown"
+                
+            # Detect regime
+            regime_result = self.regime_detector.detect_regime(price_data)
+            
+            # Store regime detection result in Redis
+            await self.data_collector.store_market_regime(regime_result)
+            
+            # Extract regime name and confidence
+            regime = regime_result.get('regime', 'unknown')
+            confidence = regime_result.get('confidence', 0)
+            
+            logger.info(f"ML-based regime detection: {regime} (confidence: {confidence:.4f})")
+            
+            # Create and save visualization of the regime detection
+            self._create_regime_visualization(price_data, regime_result)
+            
+            return regime
+            
+        except Exception as e:
+            logger.error(f"Error in ML regime detection: {str(e)}")
+            return "unknown"
+            
+    def _create_regime_visualization(self, price_data, regime_result):
+        """Create and save visualization of the regime detection."""
+        try:
+            if price_data is None or len(price_data) == 0:
+                return
+                
+            # Create a figure with two subplots
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), gridspec_kw={'height_ratios': [3, 1]})
+            
+            # Plot price chart
+            price_data['close'].plot(ax=ax1, color='blue', label='Price')
+            ax1.set_title(f"Market Regime Detection: {regime_result.get('regime', 'unknown')}")
+            ax1.set_ylabel('Price')
+            ax1.legend()
+            ax1.grid(True)
+            
+            # Plot regime probabilities
+            probs = regime_result.get('probs', {})
+            if probs:
+                regimes = list(probs.keys())
+                values = list(probs.values())
+                
+                # Create probability bars
+                ax2.bar(regimes, values, color=['green', 'red', 'blue', 'orange'])
+                ax2.set_ylim(0, 1)
+                ax2.set_ylabel('Probability')
+                ax2.set_title('Regime Probabilities')
+                ax2.grid(True)
+            
+            plt.tight_layout()
+            
+            # Save visualization to bytes
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png')
+            buf.seek(0)
+            
+            # Encode as base64 and store in Redis
+            image_base64 = base64.b64encode(buf.read()).decode('utf-8')
+            data_uri = f"data:image/png;base64,{image_base64}"
+            
+            # Store visualization in Redis
+            asyncio.create_task(self.redis.set('market_regime_visualization', data_uri))
+            
+            plt.close(fig)
+            
+        except Exception as e:
+            logger.error(f"Error creating regime visualization: {str(e)}")
+            
+    async def detect_current_regime_ml(self):
+        """
+        Detect the current market regime using ML methods with fallback to traditional methods.
+        
+        Returns:
+            Detected market regime: 'bull', 'bear', 'ranging', 'volatile', or 'unknown'
+        """
+        try:
+            if self.detection_method == 'ml':
+                # Use only ML-based detection
+                return await self.detect_regime_with_ml()
+                
+            elif self.detection_method == 'traditional':
+                # Use only traditional rule-based detection
+                return await self.detect_current_regime()
+                
+            elif self.detection_method == 'hybrid':
+                # Try ML first, fall back to traditional if needed
+                ml_regime = await self.detect_regime_with_ml()
+                
+                if ml_regime != 'unknown':
+                    return ml_regime
+                else:
+                    logger.info("Falling back to traditional regime detection")
+                    return await self.detect_current_regime()
+            
+            else:
+                logger.error(f"Unsupported detection method: {self.detection_method}")
+                return "unknown"
+                
+        except Exception as e:
+            logger.error(f"Error in market regime detection: {str(e)}")
+            return "unknown"
     
     async def get_historical_market_data(self, lookback_hours: int = 168) -> List[Dict]:
         """
@@ -797,6 +1111,48 @@ class MarketRegimeService:
             logger.error(f"Error in detect_and_switch_if_needed: {str(e)}")
             return ("unknown", False)
     
+    async def health_check_server(self):
+        """Run a simple TCP server for health checks."""
+        try:
+            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server.bind(('0.0.0.0', self.service_port))
+            server.listen(1)
+            server.setblocking(False)
+            
+            logger.info(f"Health check server listening on port {self.service_port}")
+            
+            while self.running:
+                try:
+                    await asyncio.sleep(1)
+                except Exception as e:
+                    logger.error(f"Health check server loop error: {str(e)}")
+                    break
+                    
+        except Exception as e:
+            logger.error(f"Failed to start health check server: {str(e)}")
+            raise  # Re-raise the exception to trigger service restart
+        finally:
+            try:
+                server.close()
+            except Exception:
+                pass
+    
+    async def maintain_redis(self):
+        """Maintain Redis connection."""
+        logger.debug("Starting Redis connection maintenance...")
+        while self.running:
+            try:
+                if self.redis:
+                    await self.redis.ping()
+                else:
+                    await self.connect_redis()
+                await asyncio.sleep(1)
+            except Exception as e:
+                logger.error(f"Redis connection error: {str(e)}")
+                self.redis = None
+                await asyncio.sleep(5)
+    
     async def run(self):
         """
         Main service loop.
@@ -804,40 +1160,106 @@ class MarketRegimeService:
         try:
             logger.info("Starting Market Regime Service...")
             
+            # First establish Redis connection
+            if not await self.connect_redis(max_retries=15, retry_delay=2):
+                raise Exception("Failed to establish initial Redis connection")
+            
+            # Initialize ML components
+            await self.initialize_ml_components()
+            
             # Initial load of performance history from Redis
             perf_history = await self.redis.get('strategy_regime_performance')
             if perf_history:
                 self.strategy_performance_history = json.loads(perf_history)
                 logger.info(f"Loaded performance history for {len(self.strategy_performance_history)} strategies")
             
-            # Initial regime detection and strategy selection
-            current_regime, _ = await self.detect_and_switch_if_needed()
+            # Initial regime detection and strategy selection using ML or hybrid approach
+            if self.detection_method in ['ml', 'hybrid']:
+                current_regime = await self.detect_current_regime_ml()
+            else:
+                current_regime = await self.detect_current_regime()
+                
+            self.current_regime = current_regime
             logger.info(f"Initial market regime: {current_regime}")
             
-            # Main service loop
-            while self.running:
-                try:
-                    # Check for regime changes and switch strategies if needed
-                    current_regime, switch_result = await self.detect_and_switch_if_needed()
-                    
-                    if not switch_result:
-                        logger.warning(f"Failed to switch strategy for {current_regime} regime")
-                    
-                    # Periodically update strategy performance by regime (less frequently)
-                    if datetime.now().hour % 12 == 0 and datetime.now().minute < 5:
-                        await self.update_strategy_performance_by_regime()
-                    
-                    # Sleep until next check
-                    await asyncio.sleep(self.check_interval)
-                    
-                except Exception as e:
-                    logger.error(f"Error in market regime service loop: {str(e)}")
-                    await asyncio.sleep(60)  # Sleep for a minute on error
+            # Initialize strategy for the detected regime
+            switch_result = await self.switch_to_regime_strategy(current_regime)
+            if not switch_result:
+                logger.warning(f"Failed to initialize strategy for {current_regime} regime")
+            
+            # Create tasks for all service components
+            tasks = [
+                asyncio.create_task(self.maintain_redis()),
+                asyncio.create_task(self.health_check_server()),
+                asyncio.create_task(self.regime_detection_loop())
+            ]
+            
+            # Wait for tasks to complete
+            await asyncio.gather(*tasks)
             
         except Exception as e:
             logger.error(f"Critical error in Market Regime Service: {str(e)}")
         finally:
             await self.stop()
+            
+    async def regime_detection_loop(self):
+        """Main loop for regime detection and strategy switching."""
+        logger.info("Starting market regime detection loop...")
+        
+        while self.running:
+            try:
+                # Check for regime changes and switch strategies if needed
+                if self.detection_method in ['ml', 'hybrid']:
+                    current_regime = await self.detect_current_regime_ml()
+                else:
+                    current_regime = await self.detect_current_regime()
+                
+                previous_regime = self.current_regime
+                self.current_regime = current_regime
+                
+                # Handle regime change
+                if previous_regime != current_regime:
+                    logger.info(f"Market regime changed from {previous_regime} to {current_regime}")
+                    
+                    # Update regime history
+                    self.regime_history.append({
+                        'timestamp': datetime.now().isoformat(),
+                        'regime': current_regime
+                    })
+                    
+                    # Keep only the last 100 entries in history
+                    if len(self.regime_history) > 100:
+                        self.regime_history = self.regime_history[-100:]
+                    
+                    # Store regime history in Redis
+                    await self.redis.set(
+                        'market_regime_history',
+                        json.dumps(self.regime_history)
+                    )
+                    
+                    # Switch to the best strategy for this regime
+                    switch_result = await self.switch_to_regime_strategy(current_regime)
+                    if not switch_result:
+                        logger.warning(f"Failed to switch strategy for {current_regime} regime")
+                else:
+                    logger.info(f"Current market regime is still {current_regime}, no strategy switch needed")
+                
+                # Periodically update strategy performance by regime (less frequently)
+                if datetime.now().hour % 12 == 0 and datetime.now().minute < 5:
+                    await self.update_strategy_performance_by_regime()
+                
+                # Periodically retrain ML models if needed
+                time_since_training = (datetime.now() - self.last_training_time).total_seconds()
+                if time_since_training > self.model_training_interval:
+                    logger.info("Scheduling periodic model retraining...")
+                    asyncio.create_task(self.train_regime_models())
+                
+                # Sleep until next check
+                await asyncio.sleep(self.check_interval)
+                
+            except Exception as e:
+                logger.error(f"Error in regime detection loop: {str(e)}")
+                await asyncio.sleep(60)  # Sleep for a minute on error
     
     async def stop(self):
         """
@@ -845,7 +1267,16 @@ class MarketRegimeService:
         """
         logger.info("Stopping Market Regime Service...")
         self.running = False
-        self.redis.close()
+        # Save current regime detector model if trained
+        if self.regime_detector and self.regime_detector.is_trained:
+            model_path = os.path.join(self.model_dir, f"market_regime_{self.ml_method}.pkl")
+            self.regime_detector.save_model(model_path)
+            logger.info(f"Saved market regime model to {model_path}")
+        
+        # Close Redis connection
+        if self.redis:
+            await self.redis.close()
+            logger.info("Closed Redis connection")
 
 if __name__ == "__main__":
     service = MarketRegimeService()
