@@ -17,7 +17,7 @@
 ### Advanced ML Capabilities
 - [x] **ML-01**: Implement genetic algorithms for strategy evolution
 - [x] **ML-02**: Add reinforcement learning capabilities
-- [ ] **ML-03**: Create feature importance analysis for model inputs
+- [x] **ML-03**: Create feature importance analysis for model inputs
 - [ ] **ML-04**: Develop market regime detection (trending/ranging/volatile)
 - [ ] **ML-05**: Implement neural network models for price prediction
 

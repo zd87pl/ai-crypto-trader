@@ -255,5 +255,29 @@
             "browser_ttl": 0,
             "edge_ttl": 30
         }
+    },
+    "feature_importance": {
+        "enabled": true,
+        "analysis_interval": 86400,
+        "min_data_points": 1000,
+        "n_permutations": 30,
+        "test_size": 0.3,
+        "random_state": 42,
+        "n_estimators": 100,
+        "max_depth": null,
+        "service_port": 8007,
+        "feature_pruning_threshold": 0.25,
+        "min_importance_threshold": 0.01,
+        "save_visualizations": true,
+        "report_retention_days": 30,
+        "auto_optimize_model": true,
+        "recalibration_triggers": {
+            "significant_market_shift": true,
+            "performance_degradation": true,
+            "new_feature_addition": true,
+            "periodic_schedule": true
+        },
+        "notification_channels": ["redis", "file"],
+        "weight_update_enabled": true
     }
 }

@@ -166,19 +166,58 @@ def analyze_performance(strategy_results):
             'sentiment_influence': 0,
             'volume_impact': 0,
             'engagement_correlation': 0
+        },
+        'feature_importance': {
+            'top_features': {},
+            'top_categories': {},
+            'recommendations': {}
         }
     }
     return analysis
 ```
 
-2. Strategy Improvement:
+2. Feature Importance Analysis:
+```python
+def analyze_feature_importance(strategy_data, trading_history):
+    # Calculate permutation importance for features
+    permutation_results = calculate_permutation_importance(strategy_data)
+    
+    # Group features by category
+    category_importance = calculate_category_importance(permutation_results)
+    
+    # Generate recommendations for feature prioritization
+    recommendations = generate_feature_recommendations(permutation_results, category_importance)
+    
+    # Optimize model based on feature importance
+    optimized_model = create_optimized_model(permutation_results)
+    
+    return {
+        'permutation_importance': permutation_results,
+        'category_importance': category_importance,
+        'recommendations': recommendations,
+        'optimized_model': optimized_model
+    }
+```
+
+3. Strategy Improvement:
 ```python
 def improve_strategy(analysis):
+    # Use feature importance insights to focus improvements
+    feature_importance = analysis['feature_importance']
+    top_features = feature_importance['top_features']
+    feature_recommendations = feature_importance['recommendations']
+    
+    # Create improvement prompt with feature importance guidance
     prompt = create_improvement_prompt(analysis)
+    
+    # Add feature importance insights to prompt
+    prompt += f"\nFocus on these high-importance features: {', '.join(feature_recommendations['features_to_prioritize'])}"
+    prompt += f"\nConsider reducing reliance on: {', '.join(feature_recommendations['features_to_reconsider'])}"
+    
     improved_strategy = openai.chat.completions.create(
         model="gpt-4o",
         messages=[
-            {"role": "system", "content": "You are improving a trading strategy..."},
+            {"role": "system", "content": "You are improving a trading strategy with feature importance insights..."},
             {"role": "user", "content": prompt}
         ]
     )
@@ -235,15 +274,19 @@ graph LR
     F --> D
 ```
 
-2. Continuous Improvement:
+2. Continuous Improvement with Feature Importance:
 ```mermaid
 graph LR
     A[Monitor Performance] --> B[Analyze Results]
+    G[Feature Importance] --> B
     B --> C[Generate Improvements]
     C --> D[Test New Version]
     D --> E[Deploy Update]
     F[Social Trends] --> B
     F --> C
+    G --> C
+    G --> H[Model Optimization]
+    H --> D
 ```
 
 ## Performance Goals
@@ -266,7 +309,15 @@ graph LR
     "improvement_threshold": 0.1,
     "max_iterations": 10,
     "convergence_criteria": 0.02,
-    "social_metrics_weight": 0.3
+    "social_metrics_weight": 0.3,
+    "feature_importance": {
+        "weight": 0.25,
+        "min_importance_threshold": 0.05,
+        "feature_pruning_threshold": 0.25,
+        "top_features_count": 10,
+        "model_update_frequency": "daily",
+        "optimization_enabled": true
+    }
 }
 ```
 
@@ -299,15 +350,49 @@ export default {
 }
 ```
 
-3. Monitor and Evolve with Social Trends:
+3. Monitor and Evolve with Feature Importance and Social Trends:
 ```python
 async def monitor_and_evolve():
     while True:
+        # Collect performance data
         performance = await monitor_strategy()
         social_impact = await analyze_social_impact()
-        if performance.needs_improvement() or social_impact.indicates_change():
-            improved_strategy = await evolve_strategy(social_impact)
+        
+        # Run feature importance analysis
+        feature_importance = await analyze_feature_importance(
+            performance.trading_data,
+            performance.trade_history
+        )
+        
+        # Check if any factor indicates need for strategy evolution
+        needs_update = (
+            performance.needs_improvement() or 
+            social_impact.indicates_change() or
+            feature_importance.significant_changes()
+        )
+        
+        if needs_update:
+            # Create comprehensive analysis including feature importance
+            combined_analysis = {
+                "performance": performance,
+                "social_impact": social_impact,
+                "feature_importance": feature_importance
+            }
+            
+            # Evolve strategy with all insights
+            improved_strategy = await evolve_strategy(combined_analysis)
+            
+            # Deploy optimized model based on feature importance
+            if feature_importance.has_optimized_model():
+                await deploy_optimized_model(feature_importance.optimized_model)
+            
+            # Deploy improved strategy
             await deploy_new_version(improved_strategy)
+            
+        # Generate feature importance reports
+        if time_for_feature_report():
+            await generate_feature_importance_report(feature_importance)
+            
         await asyncio.sleep(3600)  # Check hourly
 ```
 

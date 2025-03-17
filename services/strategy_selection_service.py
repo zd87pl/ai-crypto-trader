@@ -12,6 +12,7 @@ from sklearn.preprocessing import StandardScaler
 
 # Import our custom modules
 from services.market_regime_service import MarketRegimeService
+from services.model_integration import FeatureImportanceIntegrator
 
 # Load environment variables
 load_dotenv()
@@ -57,6 +58,9 @@ class StrategySelectionService:
         # Initialize market regime service
         self.market_regime_service = MarketRegimeService()
         
+        # Initialize feature importance integrator
+        self.feature_importance = FeatureImportanceIntegrator()
+        
         # Strategy mapping and scoring
         self.strategy_scores = {}
         self.active_strategy_id = None
@@ -65,11 +69,12 @@ class StrategySelectionService:
         
         # Selection weighting factors (how much each component influences selection)
         self.selection_weights = {
-            'market_regime': float(os.getenv('WEIGHT_MARKET_REGIME', '0.35')),
+            'market_regime': float(os.getenv('WEIGHT_MARKET_REGIME', '0.30')),
             'historical_performance': float(os.getenv('WEIGHT_HISTORICAL_PERF', '0.25')),
             'risk_profile': float(os.getenv('WEIGHT_RISK_PROFILE', '0.15')),
             'social_sentiment': float(os.getenv('WEIGHT_SOCIAL_SENTIMENT', '0.15')),
-            'market_volatility': float(os.getenv('WEIGHT_MARKET_VOLATILITY', '0.10'))
+            'market_volatility': float(os.getenv('WEIGHT_MARKET_VOLATILITY', '0.10')),
+            'feature_importance': float(os.getenv('WEIGHT_FEATURE_IMPORTANCE', '0.05'))
         }
         
         # Normalize weights to ensure they sum to 1.0
@@ -569,6 +574,118 @@ class StrategySelectionService:
             logger.error(f"Error calculating volatility scores: {str(e)}")
             return {strategy['worker_id']: 0.5 for strategy in strategies}
     
+    async def calculate_feature_importance_scores(self, strategies: List[Dict]) -> Dict[str, float]:
+        """
+        Calculate strategy scores based on feature importance analysis.
+        
+        Args:
+            strategies: List of strategy dictionaries
+            
+        Returns:
+            Dictionary mapping strategy IDs to scores (0-1)
+        """
+        try:
+            # Update feature importance data
+            self.feature_importance.update_feature_importance_data()
+            
+            # Get feature importance data
+            feature_importance_data = self.feature_importance.feature_importance_data
+            if not feature_importance_data:
+                logger.warning("No feature importance data available, using default scores")
+                return {strategy['worker_id']: 0.5 for strategy in strategies}
+            
+            feature_importance_scores = {}
+            
+            # Get category weights and top features
+            category_weights = feature_importance_data.get('top_categories', {})
+            top_features = feature_importance_data.get('top_features_permutation', {})
+            
+            for strategy in strategies:
+                strategy_id = strategy['worker_id']
+                
+                try:
+                    # Get strategy category/type
+                    strategy_category = strategy.get('category', '').lower()
+                    strategy_type = strategy.get('type', '').lower()
+                    parameters = strategy.get('parameters', {})
+                    
+                    # Default score
+                    score = 0.5
+                    
+                    # Adjust based on strategy category and feature importance
+                    # Social-based strategies
+                    if 'social' in strategy_category or 'sentiment' in strategy_type:
+                        if 'social' in category_weights and category_weights['social'] > 0.2:
+                            # Social features are important
+                            score += 0.3
+                        elif 'social_sentiment' in top_features and top_features['social_sentiment'] > 0.1:
+                            # Social sentiment specifically is important
+                            score += 0.2
+                    
+                    # Momentum-based strategies
+                    if 'momentum' in strategy_category or 'momentum' in strategy_type:
+                        if 'momentum' in category_weights and category_weights['momentum'] > 0.2:
+                            # Momentum features are important
+                            score += 0.25
+                        elif any(f in top_features and top_features[f] > 0.1 for f in ['rsi', 'macd', 'stoch_k']):
+                            # Specific momentum indicators are important
+                            score += 0.2
+                    
+                    # Price action strategies
+                    if 'price_action' in strategy_category or 'price' in strategy_type:
+                        if 'price_action' in category_weights and category_weights['price_action'] > 0.2:
+                            # Price action features are important
+                            score += 0.25
+                        elif any(f in top_features and top_features[f] > 0.1 for f in 
+                                ['price_change_5m', 'price_change_15m']):
+                            # Specific price change indicators are important
+                            score += 0.2
+                    
+                    # Volatility-based strategies
+                    if 'volatility' in strategy_category or 'volatility' in strategy_type:
+                        if 'volatility' in category_weights and category_weights['volatility'] > 0.2:
+                            # Volatility features are important
+                            score += 0.2
+                        elif any(f in top_features and top_features[f] > 0.1 for f in 
+                                ['atr', 'bb_width', 'bb_position']):
+                            # Specific volatility indicators are important
+                            score += 0.15
+                    
+                    # Trend-based strategies
+                    if 'trend' in strategy_category or 'trend' in strategy_type:
+                        if 'trend' in category_weights and category_weights['trend'] > 0.2:
+                            # Trend features are important
+                            score += 0.2
+                        elif any(f in top_features and top_features[f] > 0.1 for f in 
+                                ['trend_strength', 'ema_12', 'ema_26']):
+                            # Specific trend indicators are important
+                            score += 0.15
+                    
+                    # Check if strategy uses high-importance features
+                    if 'indicators' in parameters:
+                        used_indicators = parameters['indicators']
+                        important_indicators = list(top_features.keys())[:5]  # Top 5 important features
+                        
+                        # Count how many important indicators the strategy uses
+                        matching_indicators = [ind for ind in used_indicators if ind in important_indicators]
+                        if len(matching_indicators) >= 3:
+                            score += 0.2
+                        elif len(matching_indicators) >= 1:
+                            score += 0.1
+                    
+                    # Ensure score is between 0 and 1
+                    feature_importance_scores[strategy_id] = max(0.0, min(1.0, score))
+                    
+                except Exception as e:
+                    logger.error(f"Error analyzing strategy for feature importance: {str(e)}")
+                    feature_importance_scores[strategy_id] = 0.5  # Default to neutral score
+            
+            return feature_importance_scores
+            
+        except Exception as e:
+            logger.error(f"Error calculating feature importance scores: {str(e)}")
+            return {strategy['worker_id']: 0.5 for strategy in strategies}
+    
     async def apply_time_based_adjustments(self, scores: Dict[str, float]) -> Dict[str, float]:
         """
         Apply time-based adjustments to strategy scores.
@@ -692,6 +809,7 @@ class StrategySelectionService:
             performance_scores = await self.calculate_historical_performance_scores(strategies)
             social_scores = await self.calculate_social_sentiment_scores(strategies)
             volatility_scores = await self.calculate_volatility_scores(strategies)
+            feature_importance_scores = await self.calculate_feature_importance_scores(strategies)
             
             # Combine all scores using selection weights
             combined_scores = {}
@@ -705,7 +823,8 @@ class StrategySelectionService:
                     performance_scores.get(strategy_id, 0.0) * self.selection_weights['historical_performance'] +
                     risk_scores.get(strategy_id, 0.0) * self.selection_weights['risk_profile'] +
                     social_scores.get(strategy_id, 0.0) * self.selection_weights['social_sentiment'] +
-                    volatility_scores.get(strategy_id, 0.0) * self.selection_weights['market_volatility']
+                    volatility_scores.get(strategy_id, 0.0) * self.selection_weights['market_volatility'] +
+                    feature_importance_scores.get(strategy_id, 0.0) * self.selection_weights['feature_importance']
                 )
                 
                 combined_scores[strategy_id] = combined_score
@@ -744,7 +863,8 @@ class StrategySelectionService:
                     'historical_performance': performance_scores.get(best_strategy_id, 0.0),
                     'risk_profile': risk_scores.get(best_strategy_id, 0.0),
                     'social_sentiment': social_scores.get(best_strategy_id, 0.0),
-                    'market_volatility': volatility_scores.get(best_strategy_id, 0.0)
+                    'market_volatility': volatility_scores.get(best_strategy_id, 0.0),
+                    'feature_importance': feature_importance_scores.get(best_strategy_id, 0.0)
                 }
                 
                 logger.info(f"Selected strategy {best_strategy_id} with score {best_score:.4f}")
@@ -949,8 +1069,14 @@ class StrategySelectionService:
                     if risk_profile and risk_profile != self.current_risk_profile:
                         await self.update_risk_profile(risk_profile)
                     
+                    # Ensure feature importance data is up-to-date
+                    self.feature_importance.update_feature_importance_data()
+                    
                     # Publish current selection metrics to Redis
                     if optimal_strategy:
+                        # Get feature importance summary
+                        feature_importance_summary = self.feature_importance.get_feature_importance_summary()
+                        
                         await self.redis.set('strategy_selection_metrics', json.dumps({
                             'timestamp': datetime.now().isoformat(),
                             'active_strategy_id': self.active_strategy_id,
@@ -958,7 +1084,8 @@ class StrategySelectionService:
                             'optimal_score': optimal_strategy.get('selection_score', 0.0),
                             'optimal_confidence': optimal_strategy.get('selection_confidence', 0.0),
                             'market_regime': optimal_strategy.get('market_regime', 'unknown'),
-                            'factor_scores': optimal_strategy.get('factor_scores', {})
+                            'factor_scores': optimal_strategy.get('factor_scores', {}),
+                            'feature_importance': feature_importance_summary
                         }))
                     
                     # Sleep until next check

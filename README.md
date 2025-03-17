@@ -149,12 +149,16 @@ python dashboard.py
 - Explains the reasoning behind each trade
 - Logs to: `logs/ai_explainability.log`
 
-### 12. Feature Importance Service
-- Analyzes the importance of different features in trading decisions
-- Uses machine learning to identify most influential factors
-- Provides visualizations of feature importance
-- Tracks feature importance over time
-- Helps optimize trading models and strategies
+### 12. Feature Importance Analyzer
+- Analyzes the importance of different features in machine learning models
+- Uses permutation importance and RandomForest feature analysis
+- Identifies which indicators have the most influence on trading decisions
+- Categorizes features by group (price action, momentum, volatility, trend, volume, social)
+- Generates visualizations and comprehensive reports
+- Creates optimized models by pruning low-importance features
+- Publishes results to other services via Redis
+- Provides real-time feature importance tracking in the dashboard
+- Helps focus data collection on high-value indicators
 - Logs to: `logs/feature_importance.log`
 
 ### 13. Portfolio Risk Management Service
@@ -273,8 +277,8 @@ python run_ai_model_services.py --model-registry
 # Start the AI explainability service
 python run_ai_model_services.py --explainability
 
-# Start the feature importance service
-python services/feature_importance_service.py
+# Start the feature importance analyzer
+python services/feature_importance_analyzer.py
 
 # Start the social risk adjuster service
 python services/social_risk_adjuster.py
@@ -382,6 +386,58 @@ For more detailed instructions, see `backtesting/README.md`.
     "volatility_adj": 0.08,
     "timestamp": "2024-11-24T21:33:45.029Z",
     "confidence": 0.85
+}
+```
+
+### Feature Importance Analysis
+```json
+{
+    "timestamp": "2024-11-24T14:30:00.000Z",
+    "analysis_type": "feature_importance",
+    "model_type": "RandomForest",
+    "feature_count": 24,
+    "top_features_permutation": {
+        "social_sentiment": 0.145,
+        "rsi": 0.132,
+        "social_volume": 0.118,
+        "price_change_5m": 0.097,
+        "bb_position": 0.089,
+        "macd": 0.082,
+        "social_engagement": 0.076,
+        "stoch_k": 0.067,
+        "williams_r": 0.058,
+        "trend_strength": 0.054
+    },
+    "top_categories": {
+        "social": 0.325,
+        "momentum": 0.257,
+        "price_action": 0.218,
+        "volatility": 0.124,
+        "trend": 0.076
+    },
+    "recommendations": {
+        "features_to_prioritize": [
+            "social_sentiment",
+            "rsi",
+            "social_volume",
+            "price_change_5m",
+            "bb_position"
+        ],
+        "features_to_reconsider": [
+            "ichimoku_a",
+            "ichimoku_b",
+            "vwap",
+            "price_change_30m",
+            "sma_200"
+        ],
+        "categories_to_prioritize": [
+            "social",
+            "momentum"
+        ],
+        "categories_to_reconsider": [
+            "volume"
+        ]
+    }
 }
 ```
 

@@ -10,7 +10,7 @@ from auto_trader import AutoTrader
 from services.strategy_selection_service import StrategySelectionService
 from services.market_regime_service import MarketRegimeService
 from services.social_strategy_integrator import SocialStrategyIntegrator
-from services.feature_importance_service import FeatureImportanceService
+from services.feature_importance_analyzer import FeatureImportanceAnalyzer
 from services.social_risk_adjuster import SocialRiskAdjuster
 from services.monte_carlo_service import MonteCarloService
 
@@ -240,8 +240,8 @@ async def run_social_strategy_service():
 
 async def run_feature_importance_service():
     """Run the feature importance analysis service"""
-    service = FeatureImportanceService()
-    await service.run()
+    service = FeatureImportanceAnalyzer()
+    await service.start()
     
 async def run_social_risk_adjuster_service():
     """Run the social risk adjuster service"""
