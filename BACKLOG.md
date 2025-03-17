@@ -88,7 +88,7 @@
 ### Risk Management
 - [x] **RISK-01**: Implement portfolio-wide risk management
 - [x] **RISK-02**: Add dynamic position sizing based on volatility
-- [ ] **RISK-03**: Implement trailing stop losses
+- [x] **RISK-03**: Implement trailing stop losses
 - [x] **RISK-04**: Add maximum drawdown protection
 - [x] **RISK-05**: Implement correlation-based position limits
 - [x] **RISK-06**: Add AI-driven risk assessment with social metrics

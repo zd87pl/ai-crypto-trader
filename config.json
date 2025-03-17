@@ -28,7 +28,33 @@
         "satellite_position_limit": 0.2,
         "portfolio_var_breach_action": "reduce_risk",
         "adaptive_stop_loss_enabled": true,
-        "trailing_stop_loss_enabled": false
+        "trailing_stop_loss_enabled": true,
+        "trailing_stop_settings": {
+            "activation_threshold_pct": 1.0,
+            "trail_percent": 0.8,
+            "step_size": 0.2,
+            "max_adjustment_frequency_seconds": 30,
+            "strategy": "percent_based",
+            "min_price_movement_pct": 0.5,
+            "strategies": {
+                "percent_based": {
+                    "trail_percent": 0.8,
+                    "min_trail_distance": 0.5
+                },
+                "atr_based": {
+                    "atr_multiplier": 2.0,
+                    "min_periods": 14
+                },
+                "volatility_based": {
+                    "volatility_multiplier": 1.5,
+                    "lookback_periods": 20
+                },
+                "fixed_amount": {
+                    "trail_amount_usdc": 5.0,
+                    "min_adjustment_pct": 0.2
+                }
+            }
+        }
     },
     "openai": {
         "model": "gpt-4o",
