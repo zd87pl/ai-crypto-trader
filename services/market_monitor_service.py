@@ -16,6 +16,14 @@ from ta.momentum import RSIIndicator, StochasticOscillator, WilliamsRIndicator
 from ta.volatility import BollingerBands
 from services.utils.indicator_combinations import calculate_indicator_combinations
 from services.utils.volume_profile_analyzer import VolumeProfileAnalyzer
+from services.utils.metrics import get_metrics, is_metrics_enabled
+from services.utils.circuit_breaker import (
+    circuit_breaker, 
+    with_retry, 
+    CircuitBreakerConfig, 
+    CircuitBreakerOpenException,
+    get_circuit_breaker
+)
 
 # Create logs directory if it doesn't exist
 os.makedirs('logs', exist_ok=True)
@@ -78,6 +86,33 @@ class MarketMonitorService:
         self.volume_delta_enabled = self.config.get('volume_profile', {}).get('delta_enabled', True)
         self.volume_anomaly_detection = self.config.get('volume_profile', {}).get('anomaly_detection', True)
         self.last_volume_profile_update = {}
+        
+        # Initialize metrics if enabled
+        self.metrics = None
+        if is_metrics_enabled():
+            self.metrics = get_metrics('market_monitor', self.health_check_port)
+            logger.info("Metrics collection enabled for Market Monitor Service")
+        
+        # Initialize circuit breakers for external services
+        self.binance_cb = get_circuit_breaker(
+            'binance_api',
+            CircuitBreakerConfig(
+                failure_threshold=3,
+                recovery_timeout=30,
+                expected_exception=Exception,
+                timeout=15.0
+            )
+        )
+        
+        self.redis_cb = get_circuit_breaker(
+            'redis_operations',
+            CircuitBreakerConfig(
+                failure_threshold=5,
+                recovery_timeout=10,
+                expected_exception=ConnectionError,
+                timeout=5.0
+            )
+        )
 
     async def connect_redis(self, max_retries=5, retry_delay=5):
         """Establish Redis connection with retries"""
@@ -92,18 +127,28 @@ class MarketMonitorService:
                     )
                 await self.redis.ping()
                 logger.info("Successfully connected to Redis")
+                if self.metrics:
+                    self.metrics.set_service_health(True)
                 return True
             except (ConnectionError, Exception) as e:
                 retries += 1
                 logger.error(f"Failed to connect to Redis (attempt {retries}/{max_retries}): {str(e)}")
+                if self.metrics:
+                    self.metrics.error_counter.labels(
+                        service='market_monitor',
+                        error_type='redis_connection',
+                        endpoint='connect_redis'
+                    ).inc()
                 if retries < max_retries:
                     await asyncio.sleep(retry_delay)
                 else:
                     logger.error("Max retries reached. Could not connect to Redis.")
+                    if self.metrics:
+                        self.metrics.set_service_health(False)
                     return False
 
     def get_historical_data(self, symbol):
-        """Get historical klines/candlestick data"""
+        """Get historical klines/candlestick data with circuit breaker protection"""
         try:
             # Check if we have cached data that's still valid
             if symbol in self.historical_data:
@@ -111,30 +156,19 @@ class MarketMonitorService:
                 if (datetime.now() - last_update).total_seconds() < 60:  # Cache for 1 minute
                     return self.historical_data[symbol]
 
-            # Get 1m, 3m, 5m, and 15m candles
-            klines_1m = self.client.get_klines(
-                symbol=symbol,
-                interval='1m',
-                limit=100
-            )
+            # Get 1m, 3m, 5m, and 15m candles with circuit breaker protection
+            @self.binance_cb
+            def get_binance_klines(symbol, interval, limit):
+                return self.client.get_klines(
+                    symbol=symbol,
+                    interval=interval,
+                    limit=limit
+                )
             
-            klines_3m = self.client.get_klines(
-                symbol=symbol,
-                interval='3m',
-                limit=100
-            )
-            
-            klines_5m = self.client.get_klines(
-                symbol=symbol,
-                interval='5m',
-                limit=100
-            )
-            
-            klines_15m = self.client.get_klines(
-                symbol=symbol,
-                interval='15m',
-                limit=100
-            )
+            klines_1m = get_binance_klines(symbol, '1m', 100)
+            klines_3m = get_binance_klines(symbol, '3m', 100)
+            klines_5m = get_binance_klines(symbol, '5m', 100)
+            klines_15m = get_binance_klines(symbol, '15m', 100)
             
             # Process candles for all timeframes
             df_1m = pd.DataFrame(klines_1m, columns=[
@@ -392,10 +426,15 @@ class MarketMonitorService:
                 current_time = datetime.now()
 
                 for symbol, ticker in batch:
+                    start_time = datetime.now()
                     try:
                         # Process market data
                         price = float(ticker['c'])
                         volume = float(ticker['v']) * price
+
+                        # Record market data update metrics
+                        if self.metrics:
+                            self.metrics.record_market_data_update(symbol, 'binance')
 
                         # Get historical data and calculate indicators
                         data = self.get_historical_data(symbol)
@@ -424,6 +463,13 @@ class MarketMonitorService:
                                     'price_change_5m': indicators['price_change_5m'],
                                     'price_change_15m': indicators['price_change_15m']
                                 }
+                                
+                                # Update price change metrics
+                                if self.metrics:
+                                    self.metrics.update_price_change(symbol, '1m', indicators['price_change_1m'])
+                                    self.metrics.update_price_change(symbol, '3m', indicators['price_change_3m'])
+                                    self.metrics.update_price_change(symbol, '5m', indicators['price_change_5m'])
+                                    self.metrics.update_price_change(symbol, '15m', indicators['price_change_15m'])
                                 
                                 # Calculate indicator combinations
                                 try:
@@ -484,18 +530,30 @@ class MarketMonitorService:
                                 # Log market update before publishing
                                 logger.debug(f"Publishing market update to Redis: {json.dumps(market_update)}")
 
-                                # Publish to Redis
-                                await self.redis.publish(
-                                    'market_updates',
-                                    json.dumps(market_update)
-                                )
-
-                                # Store latest data in Redis
-                                await self.redis.hset(
-                                    'current_prices',
-                                    symbol,
-                                    json.dumps(market_update)
-                                )
+                                # Publish to Redis with circuit breaker protection
+                                @self.redis_cb
+                                async def publish_to_redis():
+                                    await self.redis.publish(
+                                        'market_updates',
+                                        json.dumps(market_update)
+                                    )
+                                    # Store latest data in Redis
+                                    await self.redis.hset(
+                                        'current_prices',
+                                        symbol,
+                                        json.dumps(market_update)
+                                    )
+                                
+                                try:
+                                    await publish_to_redis()
+                                except CircuitBreakerOpenException:
+                                    logger.warning(f"Redis circuit breaker open, skipping publish for {symbol}")
+                                    if self.metrics:
+                                        self.metrics.error_counter.labels(
+                                            service='market_monitor',
+                                            error_type='circuit_breaker_open',
+                                            endpoint='redis_publish'
+                                        ).inc()
 
                                 logger.info(f"Market update - {symbol}: ${price:.8f} (24h volume: ${volume:.2f}, RSI: {indicators['rsi']:.2f})")
 
@@ -507,9 +565,24 @@ class MarketMonitorService:
                                         json.dumps(market_update)
                                     )
                                     logger.info(f"Found opportunity: {symbol} at ${price:.8f} (1m change: {indicators['price_change_1m']:.2f}%)")
+                                
+                                # Record metrics for processing duration
+                                if self.metrics:
+                                    duration = (datetime.now() - start_time).total_seconds()
+                                    self.metrics.request_duration.labels(
+                                        service='market_monitor',
+                                        endpoint='process_market_update',
+                                        method='POST'
+                                    ).observe(duration)
 
                     except Exception as e:
                         logger.error(f"Error processing update for {symbol}: {str(e)}")
+                        if self.metrics:
+                            self.metrics.error_counter.labels(
+                                service='market_monitor',
+                                error_type=type(e).__name__,
+                                endpoint='process_market_update'
+                            ).inc()
 
                 # Wait between batches
                 await asyncio.sleep(self.batch_interval)
@@ -584,6 +657,10 @@ class MarketMonitorService:
             if not await self.connect_redis():
                 raise Exception("Failed to establish initial Redis connection")
             
+            # Start metrics server if enabled
+            if self.metrics:
+                await self.metrics.start_server()
+            
             # Create tasks for WebSocket, Redis maintenance, health check server, and update processing
             tasks = [
                 asyncio.create_task(self.websocket_handler()),
@@ -597,6 +674,8 @@ class MarketMonitorService:
             
         except Exception as e:
             logger.error(f"Error in Market Monitor Service: {str(e)}")
+            if self.metrics:
+                self.metrics.set_service_health(False)
         finally:
             await self.stop()
 

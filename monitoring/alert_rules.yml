@@ -1,0 +1,141 @@
+groups:
+  - name: crypto-trader-alerts
+    rules:
+      # Service Health Alerts
+      - alert: ServiceDown
+        expr: crypto_trader_service_health == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: "{{ $labels.service }}"
+        annotations:
+          summary: "Service {{ $labels.service }} is down"
+          description: "Service {{ $labels.service }} has been down for more than 1 minute"
+
+      # Trading Performance Alerts
+      - alert: LowTradingVolume
+        expr: rate(crypto_trader_trades_executed_total[5m]) < 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low trading volume detected"
+          description: "Trading volume has been below 0.1 trades/minute for the last 5 minutes"
+
+      - alert: HighErrorRate
+        expr: rate(crypto_trader_errors_total[5m]) > 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High error rate in {{ $labels.service }}"
+          description: "Error rate in {{ $labels.service }} is above 1 error/minute for the last 2 minutes"
+
+      # AI Model Performance Alerts
+      - alert: LowAIModelConfidence
+        expr: avg_over_time(crypto_trader_ai_model_confidence[10m]) < 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low AI model confidence for {{ $labels.symbol }}"
+          description: "AI model confidence for {{ $labels.symbol }} has been below 50% for 5 minutes"
+
+      # Market Data Alerts
+      - alert: StaleMarketData
+        expr: time() - crypto_trader_market_data_updates_total > 300
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Stale market data for {{ $labels.symbol }}"
+          description: "No market data updates received for {{ $labels.symbol }} in the last 5 minutes"
+
+      # Risk Management Alerts
+      - alert: HighPortfolioVaR
+        expr: crypto_trader_portfolio_var > 0.1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High portfolio VaR detected"
+          description: "Portfolio VaR is above 10% for the last 2 minutes"
+
+      - alert: ExcessiveDrawdown
+        expr: crypto_trader_profit_loss_usd < -1000
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Excessive drawdown detected"
+          description: "Portfolio drawdown exceeds $1000"
+
+      # System Resource Alerts
+      - alert: HighRequestLatency
+        expr: histogram_quantile(0.95, sum(rate(crypto_trader_request_latency_seconds_bucket[5m])) by (le, service)) > 5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High request latency in {{ $labels.service }}"
+          description: "95th percentile latency in {{ $labels.service }} is above 5 seconds"
+
+      # Social Sentiment Alerts
+      - alert: ExtremeSocialSentiment
+        expr: crypto_trader_social_sentiment > 0.9 or crypto_trader_social_sentiment < 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Extreme social sentiment for {{ $labels.symbol }}"
+          description: "Social sentiment for {{ $labels.symbol }} is at extreme levels ({{ $value }})"
+
+      # Redis Connection Alerts
+      - alert: RedisConnectionFailure
+        expr: increase(crypto_trader_errors_total{error_type="redis_connection"}[5m]) > 5
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis connection failures in {{ $labels.service }}"
+          description: "Multiple Redis connection failures detected in {{ $labels.service }}"
+
+      # Price Movement Alerts
+      - alert: ExtremeVolatility
+        expr: abs(crypto_trader_price_change_percent) > 10
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Extreme price volatility for {{ $labels.symbol }}"
+          description: "{{ $labels.symbol }} price changed by {{ $value }}% in {{ $labels.timeframe }}"
+
+  - name: crypto-trader-system-alerts
+    rules:
+      # Memory and CPU alerts would go here if we had node_exporter metrics
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage is above 90% on {{ $labels.instance }}"
+
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is above 80% on {{ $labels.instance }}"
+
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Low disk space on {{ $labels.instance }}"
+          description: "Disk space is below 10% on {{ $labels.instance }}"
