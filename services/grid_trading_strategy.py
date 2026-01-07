@@ -7,6 +7,7 @@ import math
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any
 import redis
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
@@ -88,10 +89,13 @@ class GridTradingStrategy:
         self.stop_loss_pct = self.grid_config.get('stop_loss_pct', 10.0)
         
         # State tracking
-        self.active_grids = {}  # symbol -> grid configuration
-        self.active_orders = {}  # symbol -> list of active orders
-        self.grid_profits = {}  # symbol -> grid profit tracking
+        self.active_grids: Dict[str, Dict[str, Any]] = {}  # symbol -> grid configuration
+        self.active_orders: Dict[str, List[Dict[str, Any]]] = {}  # symbol -> list of active orders
+        self.grid_profits: Dict[str, Dict[str, Any]] = {}  # symbol -> grid profit tracking
         self.initialized = False
+
+        # BUG-001 FIX: Add asyncio locks to prevent race conditions on shared state
+        self._grid_locks: Dict[str, asyncio.Lock] = {}  # symbol -> lock for thread-safe access
         
         # Auto-adjustment parameters
         self.volatility_lookback = self.grid_config.get('volatility_lookback', 14)  # days
@@ -118,7 +122,43 @@ class GridTradingStrategy:
         self.notify_on_trade = self.grid_config.get('notify_on_trade', True)
         
         self.logger.info(f"Grid trading strategy initialized for {len(self.symbols)} symbols")
-    
+
+    async def _get_lock(self, symbol: str) -> asyncio.Lock:
+        """Get or create an asyncio lock for a symbol to prevent race conditions."""
+        if symbol not in self._grid_locks:
+            self._grid_locks[symbol] = asyncio.Lock()
+        return self._grid_locks[symbol]
+
+    def _safe_find_grid_level_index(self, grid_levels: List[float], target_level: float) -> Optional[int]:
+        """
+        BUG-002 FIX: Safely find the index of a grid level, handling floating-point precision.
+        Returns None if the level is not found instead of raising ValueError.
+        """
+        if not grid_levels:
+            return None
+
+        # Use tolerance-based comparison for floating-point precision
+        tolerance = 1e-8
+        for i, level in enumerate(grid_levels):
+            if abs(level - target_level) < tolerance:
+                return i
+
+        # Fallback: try to find the closest level
+        min_diff = float('inf')
+        closest_idx = None
+        for i, level in enumerate(grid_levels):
+            diff = abs(level - target_level)
+            if diff < min_diff:
+                min_diff = diff
+                closest_idx = i
+
+        # Only return closest if it's within a reasonable range (0.1% of the level)
+        if closest_idx is not None and min_diff < abs(target_level) * 0.001:
+            self.logger.warning(f"Grid level {target_level} not found exactly, using closest: {grid_levels[closest_idx]}")
+            return closest_idx
+
+        return None
+
     async def run(self):
         """Run the grid trading strategy service"""
         self.logger.info("Starting Grid Trading Strategy Service")
@@ -276,9 +316,18 @@ class GridTradingStrategy:
                 if not closes:
                     self.logger.error(f"No historical data available for {symbol}")
                     return
-                
-                # Calculate price volatility
-                volatility = np.std(closes) / np.mean(closes) * 100
+
+                # BUG-006 FIX: Calculate price volatility with zero-division protection
+                mean_close = np.mean(closes)
+                if mean_close == 0 or np.isnan(mean_close) or np.isinf(mean_close):
+                    self.logger.warning(f"Invalid mean close price for {symbol}, using default volatility")
+                    volatility = 2.0  # Default volatility percentage
+                else:
+                    volatility = np.std(closes) / mean_close * 100
+                    # Sanity check the volatility value
+                    if np.isnan(volatility) or np.isinf(volatility) or volatility <= 0:
+                        self.logger.warning(f"Invalid calculated volatility for {symbol}, using default")
+                        volatility = 2.0
                 
                 # Adjust boundaries based on volatility
                 lower_boundary = current_price * (1 - volatility / 100)
@@ -516,122 +565,137 @@ class GridTradingStrategy:
     
     async def _process_grid_live(self, symbol):
         """Process grid trading for a symbol in live trading mode"""
-        if symbol not in self.active_orders or not self.active_orders[symbol]:
-            self.logger.warning(f"No active orders for {symbol}")
-            return
-        
-        # Get current price
-        ticker = self.client.get_symbol_ticker(symbol=symbol)
-        current_price = float(ticker['price'])
-        
-        # Update last price in grid config
-        if symbol in self.active_grids:
-            self.active_grids[symbol]['last_price'] = current_price
-        
-        # Get grid configuration
-        grid_config = self.active_grids[symbol]
-        grid_levels = grid_config['grid_levels']
-        quantity = grid_config['quantity']
-        price_precision = grid_config['price_precision']
-        quantity_precision = grid_config['quantity_precision']
-        
-        # Check for filled orders
-        filled_orders = []
-        active_orders = []
-        
-        for order_info in self.active_orders[symbol]:
-            try:
-                order = self.client.get_order(
-                    symbol=symbol,
-                    orderId=order_info['orderId']
-                )
-                
-                if order['status'] == 'FILLED':
-                    filled_orders.append(order_info)
-                    self.logger.info(f"Order filled for {symbol}: {order_info['side']} at {order_info['price']}")
-                else:
-                    active_orders.append(order_info)
-            
-            except BinanceAPIException as e:
-                self.logger.error(f"Error checking order status for {symbol}: {str(e)}")
-        
-        # Update active orders list
-        self.active_orders[symbol] = active_orders
-        
-        # Process filled orders and place new ones
-        for filled_order in filled_orders:
-            # Update profit tracking
-            filled_price = float(filled_order['price'])
-            filled_qty = float(filled_order['quantity'])
-            
-            if filled_order['side'] == 'BUY':
-                # Buy order filled, place a sell order above it
-                buy_level_index = grid_levels.index(filled_order['grid_level'])
-                
-                if buy_level_index < len(grid_levels) - 1:
-                    sell_level = grid_levels[buy_level_index + 1]
-                    sell_price = round(sell_level, price_precision)
-                    
-                    try:
-                        # Place sell order
-                        order = self.client.create_order(
-                            symbol=symbol,
-                            side=Client.SIDE_SELL,
-                            type=Client.ORDER_TYPE_LIMIT,
-                            timeInForce=Client.TIME_IN_FORCE_GTC,
-                            quantity=round(filled_qty, quantity_precision),
-                            price=str(sell_price)
-                        )
-                        
-                        self.active_orders[symbol].append({
-                            'orderId': order['orderId'],
-                            'side': 'SELL',
-                            'price': sell_price,
-                            'quantity': filled_qty,
-                            'status': order['status'],
-                            'grid_level': sell_level
-                        })
-                        
-                        self.logger.info(f"Placed sell order for {symbol} at {sell_price} after buy fill")
-                    
-                    except BinanceAPIException as e:
-                        self.logger.error(f"Error placing sell order for {symbol} at {sell_price}: {str(e)}")
-            
-            elif filled_order['side'] == 'SELL':
-                # Sell order filled, place a buy order below it
-                sell_level_index = grid_levels.index(filled_order['grid_level'])
-                
-                if sell_level_index > 0:
-                    buy_level = grid_levels[sell_level_index - 1]
-                    buy_price = round(buy_level, price_precision)
-                    
-                    try:
-                        # Place buy order
-                        order = self.client.create_order(
-                            symbol=symbol,
-                            side=Client.SIDE_BUY,
-                            type=Client.ORDER_TYPE_LIMIT,
-                            timeInForce=Client.TIME_IN_FORCE_GTC,
-                            quantity=round(filled_qty, quantity_precision),
-                            price=str(buy_price)
-                        )
-                        
-                        self.active_orders[symbol].append({
-                            'orderId': order['orderId'],
-                            'side': 'BUY',
-                            'price': buy_price,
-                            'quantity': filled_qty,
-                            'status': order['status'],
-                            'grid_level': buy_level
-                        })
-                        
-                        self.logger.info(f"Placed buy order for {symbol} at {buy_price} after sell fill")
-                    
-                    except BinanceAPIException as e:
-                        self.logger.error(f"Error placing buy order for {symbol} at {buy_price}: {str(e)}")
-                
-                # Calculate and track profit
-                profit = (filled_price - grid_levels[sell_level_index - 1]) * filled_qty
+        # BUG-001 FIX: Use lock to prevent race conditions
+        lock = await self._get_lock(symbol)
+        async with lock:
+            if symbol not in self.active_orders or not self.active_orders[symbol]:
+                self.logger.warning(f"No active orders for {symbol}")
+                return
+
+            # Get current price
+            ticker = self.client.get_symbol_ticker(symbol=symbol)
+            current_price = float(ticker['price'])
+
+            # Update last price in grid config
+            if symbol in self.active_grids:
+                self.active_grids[symbol]['last_price'] = current_price
+
+            # Get grid configuration
+            grid_config = self.active_grids[symbol]
+            grid_levels = grid_config['grid_levels']
+            quantity = grid_config['quantity']
+            price_precision = grid_config['price_precision']
+            quantity_precision = grid_config['quantity_precision']
+
+            # Check for filled orders - create copies to avoid modification during iteration
+            filled_orders = []
+            active_orders = []
+
+            for order_info in list(self.active_orders[symbol]):  # Iterate over a copy
+                try:
+                    order = self.client.get_order(
+                        symbol=symbol,
+                        orderId=order_info['orderId']
+                    )
+
+                    if order['status'] == 'FILLED':
+                        filled_orders.append(order_info)
+                        self.logger.info(f"Order filled for {symbol}: {order_info['side']} at {order_info['price']}")
+                    else:
+                        active_orders.append(order_info)
+
+                except BinanceAPIException as e:
+                    self.logger.error(f"Error checking order status for {symbol}: {str(e)}")
+                    active_orders.append(order_info)  # Keep the order if we can't check status
+
+            # Update active orders list
+            self.active_orders[symbol] = active_orders
+
+            # Process filled orders and place new ones
+            for filled_order in filled_orders:
+                # Update profit tracking
+                filled_price = float(filled_order['price'])
+                filled_qty = float(filled_order['quantity'])
+
+                if filled_order['side'] == 'BUY':
+                    # BUG-002 FIX: Use safe grid level lookup
+                    buy_level_index = self._safe_find_grid_level_index(grid_levels, filled_order['grid_level'])
+
+                    if buy_level_index is None:
+                        self.logger.warning(f"Grid level {filled_order['grid_level']} not found for {symbol}, skipping order placement")
+                        continue
+
+                    if buy_level_index < len(grid_levels) - 1:
+                        sell_level = grid_levels[buy_level_index + 1]
+                        sell_price = round(sell_level, price_precision)
+
+                        try:
+                            # Place sell order
+                            order = self.client.create_order(
+                                symbol=symbol,
+                                side=Client.SIDE_SELL,
+                                type=Client.ORDER_TYPE_LIMIT,
+                                timeInForce=Client.TIME_IN_FORCE_GTC,
+                                quantity=round(filled_qty, quantity_precision),
+                                price=str(sell_price)
+                            )
+
+                            self.active_orders[symbol].append({
+                                'orderId': order['orderId'],
+                                'side': 'SELL',
+                                'price': sell_price,
+                                'quantity': filled_qty,
+                                'status': order['status'],
+                                'grid_level': sell_level
+                            })
+
+                            self.logger.info(f"Placed sell order for {symbol} at {sell_price} after buy fill")
+
+                        except BinanceAPIException as e:
+                            self.logger.error(f"Error placing sell order for {symbol} at {sell_price}: {str(e)}")
+
+                elif filled_order['side'] == 'SELL':
+                    # BUG-002 FIX: Use safe grid level lookup
+                    sell_level_index = self._safe_find_grid_level_index(grid_levels, filled_order['grid_level'])
+
+                    if sell_level_index is None:
+                        self.logger.warning(f"Grid level {filled_order['grid_level']} not found for {symbol}, skipping order placement")
+                        continue
+
+                    if sell_level_index > 0:
+                        buy_level = grid_levels[sell_level_index - 1]
+                        buy_price = round(buy_level, price_precision)
+
+                        try:
+                            # Place buy order
+                            order = self.client.create_order(
+                                symbol=symbol,
+                                side=Client.SIDE_BUY,
+                                type=Client.ORDER_TYPE_LIMIT,
+                                timeInForce=Client.TIME_IN_FORCE_GTC,
+                                quantity=round(filled_qty, quantity_precision),
+                                price=str(buy_price)
+                            )
+
+                            self.active_orders[symbol].append({
+                                'orderId': order['orderId'],
+                                'side': 'BUY',
+                                'price': buy_price,
+                                'quantity': filled_qty,
+                                'status': order['status'],
+                                'grid_level': buy_level
+                            })
+
+                            self.logger.info(f"Placed buy order for {symbol} at {buy_price} after sell fill")
+
+                        except BinanceAPIException as e:
+                            self.logger.error(f"Error placing buy order for {symbol} at {buy_price}: {str(e)}")
+
+                    # Calculate and track profit with bounds checking
+                    if sell_level_index > 0:
+                        profit = (filled_price - grid_levels[sell_level_index - 1]) * filled_qty
+                    else:
+                        profit = 0
                 
                 if profit > 0:
                     self.grid_profits[symbol]['profitable_trades'] += 1
@@ -706,10 +770,14 @@ class GridTradingStrategy:
             for level in crossed_levels:
                 # Simulate a buy order being filled
                 self.logger.info(f"[SIMULATION] Grid level {level:.6f} crossed upward for {symbol}")
-                
-                # Calculate and track profit
+
+                # BUG-002 FIX: Calculate and track profit with safe index lookup
                 quantity = self.active_grids[symbol]['quantity']
-                profit = (level - grid_levels[grid_levels.index(level) - 1]) * quantity if grid_levels.index(level) > 0 else 0
+                level_index = self._safe_find_grid_level_index(grid_levels, level)
+                if level_index is not None and level_index > 0:
+                    profit = (level - grid_levels[level_index - 1]) * quantity
+                else:
+                    profit = 0
                 
                 if profit > 0:
                     self.grid_profits[symbol]['profitable_trades'] += 1
@@ -782,60 +850,63 @@ class GridTradingStrategy:
         """Rebalance grid by adjusting boundaries based on current price"""
         if symbol not in self.active_grids:
             return
-        
-        self.logger.info(f"Rebalancing grid for {symbol}")
-        
-        # Get current price
-        ticker = self.client.get_symbol_ticker(symbol=symbol)
-        current_price = float(ticker['price'])
-        
-        # Get grid configuration
-        grid_config = self.active_grids[symbol]
-        lower_boundary = grid_config['lower_boundary']
-        upper_boundary = grid_config['upper_boundary']
-        
-        # Check if current price is close to boundaries
-        lower_threshold = lower_boundary * 1.05  # Within 5% of lower boundary
-        upper_threshold = upper_boundary * 0.95  # Within 5% of upper boundary
-        
-        if current_price < lower_threshold or current_price > upper_threshold:
-            self.logger.info(f"Current price {current_price:.6f} is close to grid boundaries, rebalancing grid for {symbol}")
-            
-            # Cancel all orders in live mode
-            if not self.simulation_mode:
-                await self._cancel_orders_for_symbol(symbol)
-            
-            # Recalculate grid boundaries
-            new_lower = current_price * (1 - self.lower_boundary_pct / 100)
-            new_upper = current_price * (1 + self.upper_boundary_pct / 100)
-            
-            # Generate new grid levels
-            new_grid_levels = self._generate_grid_levels(
-                new_lower,
-                new_upper,
-                self.num_grids,
-                grid_type=self.grid_type
-            )
-            
-            # Update grid configuration
-            self.active_grids[symbol]['lower_boundary'] = new_lower
-            self.active_grids[symbol]['upper_boundary'] = new_upper
-            self.active_grids[symbol]['grid_levels'] = new_grid_levels
-            self.active_grids[symbol]['current_price'] = current_price
-            
-            # Place new orders in live mode
-            if not self.simulation_mode:
-                await self._place_initial_orders(symbol)
-            
-            # Update Redis with new grid configuration
-            self.redis.set(
-                f'grid_config:{symbol}',
-                json.dumps(self.active_grids[symbol])
-            )
-            
-            self.logger.info(f"Grid rebalanced for {symbol} with new boundaries: {new_lower:.6f} - {new_upper:.6f}")
-        else:
-            self.logger.info(f"No rebalancing needed for {symbol}, price is within boundaries")
+
+        # BUG-001 FIX: Use lock to prevent race conditions during rebalancing
+        lock = await self._get_lock(symbol)
+        async with lock:
+            self.logger.info(f"Rebalancing grid for {symbol}")
+
+            # Get current price
+            ticker = self.client.get_symbol_ticker(symbol=symbol)
+            current_price = float(ticker['price'])
+
+            # Get grid configuration
+            grid_config = self.active_grids[symbol]
+            lower_boundary = grid_config['lower_boundary']
+            upper_boundary = grid_config['upper_boundary']
+
+            # Check if current price is close to boundaries
+            lower_threshold = lower_boundary * 1.05  # Within 5% of lower boundary
+            upper_threshold = upper_boundary * 0.95  # Within 5% of upper boundary
+
+            if current_price < lower_threshold or current_price > upper_threshold:
+                self.logger.info(f"Current price {current_price:.6f} is close to grid boundaries, rebalancing grid for {symbol}")
+
+                # Cancel all orders in live mode
+                if not self.simulation_mode:
+                    await self._cancel_orders_for_symbol(symbol)
+
+                # Recalculate grid boundaries
+                new_lower = current_price * (1 - self.lower_boundary_pct / 100)
+                new_upper = current_price * (1 + self.upper_boundary_pct / 100)
+
+                # Generate new grid levels
+                new_grid_levels = self._generate_grid_levels(
+                    new_lower,
+                    new_upper,
+                    self.num_grids,
+                    grid_type=self.grid_type
+                )
+
+                # Update grid configuration
+                self.active_grids[symbol]['lower_boundary'] = new_lower
+                self.active_grids[symbol]['upper_boundary'] = new_upper
+                self.active_grids[symbol]['grid_levels'] = new_grid_levels
+                self.active_grids[symbol]['current_price'] = current_price
+
+                # Place new orders in live mode
+                if not self.simulation_mode:
+                    await self._place_initial_orders(symbol)
+
+                # Update Redis with new grid configuration
+                self.redis.set(
+                    f'grid_config:{symbol}',
+                    json.dumps(self.active_grids[symbol])
+                )
+
+                self.logger.info(f"Grid rebalanced for {symbol} with new boundaries: {new_lower:.6f} - {new_upper:.6f}")
+            else:
+                self.logger.info(f"No rebalancing needed for {symbol}, price is within boundaries")
     
     async def _adjust_grid_parameters(self, symbol):
         """Adjust grid parameters based on market conditions and performance"""

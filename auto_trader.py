@@ -9,11 +9,17 @@ from queue import Queue
 from binance.client import Client
 from binance.streams import ThreadedWebsocketManager
 from binance.enums import *
+from binance.exceptions import BinanceAPIException
 import pandas as pd
-from typing import Dict
+from typing import Dict, Optional, Any, List
 from binance_ml_strategy import CryptoScanner, TradingSignal, PositionSizer
 from ai_trader import AITrader
 from dotenv import load_dotenv
+
+
+class TradeValidationError(Exception):
+    """Custom exception for trade validation errors."""
+    pass
 
 # Load environment variables
 load_dotenv()
@@ -339,45 +345,167 @@ class TradeExecutor(threading.Thread):
 
     def round_step_size(self, quantity: float, step_size: float) -> float:
         """Round quantity to valid step size"""
+        if step_size <= 0:
+            raise ValueError(f"Invalid step_size: {step_size}")
         precision = len(str(step_size).split('.')[-1])
         return round(quantity - (quantity % step_size), precision)
+
+    def validate_trade_setup(self, trade_setup: Dict) -> None:
+        """
+        BUG-004 FIX: Validate all trading parameters before execution.
+        Raises TradeValidationError if validation fails.
+        """
+        # Check required fields exist
+        required_fields = ['symbol', 'price', 'position_size']
+        for field in required_fields:
+            if field not in trade_setup:
+                raise TradeValidationError(f"Missing required field: {field}")
+
+        # Validate symbol
+        symbol = trade_setup['symbol']
+        if not isinstance(symbol, str) or not symbol:
+            raise TradeValidationError(f"Invalid symbol: {symbol}")
+        if symbol not in self.symbol_info:
+            raise TradeValidationError(f"Unknown trading symbol: {symbol}")
+
+        # Validate price
+        try:
+            price = float(trade_setup['price'])
+        except (TypeError, ValueError):
+            raise TradeValidationError(f"Invalid price value: {trade_setup['price']}")
+
+        if price <= 0:
+            raise TradeValidationError(f"Price must be positive: {price}")
+        if price > 1e10:  # Sanity check for unreasonable prices
+            raise TradeValidationError(f"Price exceeds maximum: {price}")
+
+        # Validate position size
+        try:
+            position_size = float(trade_setup['position_size'])
+        except (TypeError, ValueError):
+            raise TradeValidationError(f"Invalid position_size value: {trade_setup['position_size']}")
+
+        if position_size <= 0:
+            raise TradeValidationError(f"Position size must be positive: {position_size}")
+
+        # Validate against symbol rules
+        rules = self.symbol_info.get(symbol)
+        if rules:
+            min_notional = rules.get('min_notional', 0)
+            if position_size < min_notional:
+                raise TradeValidationError(f"Position size {position_size} below minimum notional {min_notional}")
+
+        # Validate stop loss and take profit percentages if provided
+        if 'stop_loss_pct' in trade_setup:
+            try:
+                stop_loss = float(trade_setup['stop_loss_pct'])
+                if stop_loss <= 0 or stop_loss >= 100:
+                    raise TradeValidationError(f"Invalid stop_loss_pct: {stop_loss} (must be 0-100)")
+            except (TypeError, ValueError):
+                raise TradeValidationError(f"Invalid stop_loss_pct value: {trade_setup['stop_loss_pct']}")
+
+        if 'take_profit_pct' in trade_setup:
+            try:
+                take_profit = float(trade_setup['take_profit_pct'])
+                if take_profit <= 0 or take_profit >= 1000:
+                    raise TradeValidationError(f"Invalid take_profit_pct: {take_profit} (must be 0-1000)")
+            except (TypeError, ValueError):
+                raise TradeValidationError(f"Invalid take_profit_pct value: {trade_setup['take_profit_pct']}")
+
+    def verify_order_execution(self, order: Dict, expected_side: str, expected_quantity: float) -> bool:
+        """
+        BUG-003 FIX: Verify that an order was executed successfully.
+        Returns True if order was filled, False otherwise.
+        """
+        if not order:
+            logger.error("Order response is empty or None")
+            return False
+
+        # Check order status
+        status = order.get('status')
+        if status not in ['FILLED', 'PARTIALLY_FILLED']:
+            logger.error(f"Order not filled. Status: {status}")
+            return False
+
+        # Verify we have fills
+        fills = order.get('fills', [])
+        if not fills:
+            logger.error("Order has no fills data")
+            return False
+
+        # Verify executed quantity
+        executed_qty = float(order.get('executedQty', 0))
+        if executed_qty <= 0:
+            logger.error(f"No quantity executed: {executed_qty}")
+            return False
+
+        # Log warning if partially filled
+        if status == 'PARTIALLY_FILLED':
+            logger.warning(f"Order only partially filled: {executed_qty} / {expected_quantity}")
+
+        return True
 
     async def execute_trade(self, trade_setup: Dict):
         """Execute a trade based on the provided setup"""
         try:
+            # BUG-004 FIX: Validate trade setup before execution
+            try:
+                self.validate_trade_setup(trade_setup)
+            except TradeValidationError as e:
+                logger.error(f"Trade validation failed: {e}")
+                return
+
             symbol = trade_setup['symbol']
-            price = trade_setup['price']
-            position_size = trade_setup['position_size']
-            stop_loss_pct = trade_setup['stop_loss_pct']
-            take_profit_pct = trade_setup['take_profit_pct']
-            
+            price = float(trade_setup['price'])
+            position_size = float(trade_setup['position_size'])
+            stop_loss_pct = float(trade_setup.get('stop_loss_pct', 5.0))
+            take_profit_pct = float(trade_setup.get('take_profit_pct', 10.0))
+
             # Calculate quantity based on position size and current price
+            if price <= 0:
+                logger.error(f"Invalid price for {symbol}: {price}")
+                return
             quantity = position_size / price
-            
+
             # Get symbol trading rules
             rules = self.symbol_info.get(symbol)
             if not rules:
                 logger.error(f"No trading rules found for {symbol}")
                 return
-            
+
             # Round quantity to valid step size
             step_size = rules['step_size']
+            if step_size <= 0:
+                logger.error(f"Invalid step size for {symbol}: {step_size}")
+                return
             quantity = self.round_step_size(quantity, step_size)
-            
+
             # Check minimum notional value
             if quantity * price < rules['min_notional']:
-                logger.error(f"Order for {symbol} does not meet minimum notional value")
+                logger.error(f"Order for {symbol} does not meet minimum notional value: {quantity * price} < {rules['min_notional']}")
                 return
-            
+
             # Place market buy order
-            order = self.client.create_order(
-                symbol=symbol,
-                side=SIDE_BUY,
-                type=ORDER_TYPE_MARKET,
-                quantity=quantity
-            )
-            
-            # Get actual fill price from order
+            try:
+                order = self.client.create_order(
+                    symbol=symbol,
+                    side=SIDE_BUY,
+                    type=ORDER_TYPE_MARKET,
+                    quantity=quantity
+                )
+            except BinanceAPIException as e:
+                logger.error(f"Binance API error placing order for {symbol}: {e.code} - {e.message}")
+                return
+            except Exception as e:
+                logger.error(f"Error placing order for {symbol}: {e}")
+                return
+
+            # BUG-003 FIX: Verify order execution before proceeding
+            if not self.verify_order_execution(order, 'BUY', quantity):
+                logger.error(f"Order execution verification failed for {symbol}")
+                return
+
+            # Get actual fill price from order (now safe after verification)
             fill_price = float(order['fills'][0]['price'])
             filled_quantity = float(order['executedQty'])
             
