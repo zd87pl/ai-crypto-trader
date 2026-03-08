@@ -10,6 +10,7 @@ from binance.client import Client
 from binance.streams import ThreadedWebsocketManager
 from binance.enums import *
 import pandas as pd
+import redis
 from typing import Dict
 from binance_ml_strategy import CryptoScanner, TradingSignal, PositionSizer
 from ai_trader import AITrader
@@ -671,6 +672,14 @@ class AutoTrader:
         self.initialize_trading_directory()
         self.running = True
         
+        # Initialize Redis client for inter-service communication
+        self.redis = redis.Redis(
+            host=os.getenv('REDIS_HOST', 'localhost'),
+            port=int(os.getenv('REDIS_PORT', 6379)),
+            password=os.getenv('REDIS_PASSWORD') or None,
+            decode_responses=True
+        )
+
         # Initialize shared ThreadedWebsocketManager
         self.twm = ThreadedWebsocketManager(api_key=os.getenv('BINANCE_API_KEY'), api_secret=os.getenv('BINANCE_API_SECRET'))
         

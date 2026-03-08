@@ -1,0 +1,78 @@
+# Minimal setup: Redis + Market Monitor + Dashboard
+# Get started with just a Binance API key.
+#
+# Usage:
+#   cp .env-sample .env  # then fill in BINANCE_API_KEY and BINANCE_API_SECRET
+#   docker-compose -f docker-compose.minimal.yml up -d
+#   open http://localhost:8050
+
+version: '3.8'
+
+services:
+  redis:
+    image: redis:alpine
+    container_name: crypto-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - crypto-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+  market-monitor:
+    build: .
+    container_name: crypto-market-monitor
+    command: python3 services/market_monitor_service.py
+    environment:
+      - BINANCE_API_KEY=${BINANCE_API_KEY}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - SERVICE_PORT=8001
+      - ENABLE_METRICS=true
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./config.json:/app/config.json
+      - ./logs:/app/logs
+      - ./data:/app/data
+    networks:
+      - crypto-net
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  dashboard:
+    build: .
+    container_name: crypto-dashboard
+    command: python3 dashboard.py
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - ENABLE_METRICS=true
+      - DASH_FONT_AWESOME_SERVE_LOCALLY=true
+    ports:
+      - "8050:8050"
+    volumes:
+      - ./config.json:/app/config.json
+      - ./logs:/app/logs
+    networks:
+      - crypto-net
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  crypto-net:
+    driver: bridge
+
+volumes:
+  redis-data:

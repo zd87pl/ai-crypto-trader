@@ -7,20 +7,38 @@ import asyncio
 import threading
 from datetime import datetime, timedelta
 from auto_trader import AutoTrader
-from services.strategy_selection_service import StrategySelectionService
-from services.market_regime_service import MarketRegimeService
-from services.social_strategy_integrator import SocialStrategyIntegrator
-from services.feature_importance_analyzer import FeatureImportanceAnalyzer
-from services.social_risk_adjuster import SocialRiskAdjuster
-from services.monte_carlo_service import MonteCarloService
-from services.neural_network_service import NeuralNetworkService
-from services.pattern_recognition_service import PatternRecognitionService
-from services.news_analysis_service import NewsAnalysisService
-from services.enhanced_social_monitor_service import EnhancedSocialMonitorService
-from services.order_book_analysis_service import OrderBookAnalysisService
-from services.grid_trading_strategy import GridTradingStrategy
-from services.dca_strategy import DCAStrategy
-from services.arbitrage_detection_service import ArbitrageDetectionService
+
+# Optional service imports - each service degrades gracefully if its dependencies
+# (e.g. TensorFlow, transformers) are not installed
+_optional_services = {}
+
+def _try_import(name, module_path, class_name):
+    """Try to import a service class, log warning if unavailable."""
+    try:
+        mod = __import__(module_path, fromlist=[class_name])
+        _optional_services[name] = getattr(mod, class_name)
+    except ImportError as e:
+        logging.warning(f"Optional service '{name}' unavailable: {e}")
+        _optional_services[name] = None
+
+_try_import('strategy_selection', 'services.strategy_selection_service', 'StrategySelectionService')
+_try_import('market_regime', 'services.market_regime_service', 'MarketRegimeService')
+_try_import('social_strategy', 'services.social_strategy_integrator', 'SocialStrategyIntegrator')
+_try_import('feature_importance', 'services.feature_importance_analyzer', 'FeatureImportanceAnalyzer')
+_try_import('social_risk', 'services.social_risk_adjuster', 'SocialRiskAdjuster')
+_try_import('monte_carlo', 'services.monte_carlo_service', 'MonteCarloService')
+_try_import('neural_network', 'services.neural_network_service', 'NeuralNetworkService')
+_try_import('pattern_recognition', 'services.pattern_recognition_service', 'PatternRecognitionService')
+_try_import('news_analysis', 'services.news_analysis_service', 'NewsAnalysisService')
+_try_import('enhanced_social', 'services.enhanced_social_monitor_service', 'EnhancedSocialMonitorService')
+_try_import('order_book', 'services.order_book_analysis_service', 'OrderBookAnalysisService')
+_try_import('grid_trading', 'services.grid_trading_strategy', 'GridTradingStrategy')
+_try_import('dca', 'services.dca_strategy', 'DCAStrategy')
+_try_import('arbitrage', 'services.arbitrage_detection_service', 'ArbitrageDetectionService')
+
+# Convenience aliases for backward compatibility
+StrategySelectionService = _optional_services.get('strategy_selection')
+MarketRegimeService = _optional_services.get('market_regime')
 
 def setup_logging():
     """Setup logging configuration"""
@@ -1248,75 +1266,15 @@ def print_status(trader, strategy_selector=None):
     except Exception as e:
         pass  # Silently ignore any errors here
 
-async def run_strategy_selection_service():
-    """Run the strategy selection service"""
-    service = StrategySelectionService()
-    await service.run()
-
-async def run_market_regime_service():
-    """Run the market regime service"""
-    service = MarketRegimeService()
-    await service.run()
-
-async def run_social_strategy_service():
-    """Run the social strategy integrator service"""
-    service = SocialStrategyIntegrator()
-    await service.run()
-
-async def run_feature_importance_service():
-    """Run the feature importance analysis service"""
-    service = FeatureImportanceAnalyzer()
-    await service.start()
-    
-async def run_social_risk_adjuster_service():
-    """Run the social risk adjuster service"""
-    service = SocialRiskAdjuster()
-    await service.run()
-    
-async def run_monte_carlo_service():
-    """Run the Monte Carlo simulation service"""
-    service = MonteCarloService()
-    await service.run()
-    
-async def run_neural_network_service():
-    """Run the neural network price prediction service"""
-    service = NeuralNetworkService()
-    await service.run()
-    
-async def run_pattern_recognition_service():
-    """Run the pattern recognition service"""
-    service = PatternRecognitionService()
-    await service.run()
-    
-async def run_news_analysis_service():
-    """Run the news analysis service"""
-    service = NewsAnalysisService()
-    await service.run()
-    
-async def run_enhanced_social_monitor_service():
-    """Run the enhanced social monitor service"""
-    service = EnhancedSocialMonitorService()
-    await service.run()
-
-async def run_order_book_analysis_service():
-    """Run the order book analysis service"""
-    service = OrderBookAnalysisService()
-    await service.run()
-
-async def run_grid_trading_service():
-    """Run the grid trading strategy service"""
-    service = GridTradingStrategy()
-    await service.run()
-
-async def run_dca_strategy_service():
-    """Run the DCA strategy service"""
-    service = DCAStrategy()
-    await service.run()
-
-async def run_arbitrage_detection_service():
-    """Run the arbitrage detection service"""
-    service = ArbitrageDetectionService()
-    await service.run()
+def _make_service_runner(service_key, start_method='run'):
+    """Create an async runner for a service by its key in _optional_services."""
+    async def _runner():
+        cls = _optional_services.get(service_key)
+        if cls is None:
+            return
+        service = cls()
+        await getattr(service, start_method)()
+    return _runner
 
 def run_async_service(async_func):
     """Run an async service in the current thread"""
@@ -1325,140 +1283,45 @@ def run_async_service(async_func):
     loop.run_until_complete(async_func())
     loop.close()
 
+# Service registry: (key in _optional_services, display name, start method)
+_SERVICE_REGISTRY = [
+    ('market_regime', 'Market Regime', 'run'),
+    ('strategy_selection', 'Strategy Selection', 'run'),
+    ('social_strategy', 'Social Strategy Integrator', 'run'),
+    ('feature_importance', 'Feature Importance', 'start'),
+    ('social_risk', 'Social Risk Adjuster', 'run'),
+    ('monte_carlo', 'Monte Carlo', 'run'),
+    ('neural_network', 'Neural Network', 'run'),
+    ('pattern_recognition', 'Pattern Recognition', 'run'),
+    ('news_analysis', 'News Analysis', 'run'),
+    ('enhanced_social', 'Enhanced Social Monitor', 'run'),
+    ('order_book', 'Order Book Analysis', 'run'),
+    ('grid_trading', 'Grid Trading', 'run'),
+    ('dca', 'DCA Strategy', 'run'),
+    ('arbitrage', 'Arbitrage Detection', 'run'),
+]
+
 def main():
     """Main function to run the trader with status monitoring"""
     setup_logging()
     logging.info("Starting trading bot with automated strategy selection...")
-    
+
     # Flag to control service threads
     running = True
-    
+
     try:
-        # Start market regime service in a separate thread
-        regime_thread = threading.Thread(
-            target=run_async_service,
-            args=(run_market_regime_service,),
-            daemon=True
-        )
-        regime_thread.start()
-        logging.info("Market regime service started")
-        
-        # Start strategy selection service in a separate thread
-        strategy_thread = threading.Thread(
-            target=run_async_service,
-            args=(run_strategy_selection_service,),
-            daemon=True
-        )
-        strategy_thread.start()
-        logging.info("Strategy selection service started")
-        
-        # Start social strategy integrator in a separate thread
-        social_thread = threading.Thread(
-            target=run_async_service,
-            args=(run_social_strategy_service,),
-            daemon=True
-        )
-        social_thread.start()
-        logging.info("Social strategy integrator service started")
-        
-        # Start feature importance analysis service in a separate thread
-        feature_importance_thread = threading.Thread(
-            target=run_async_service,
-            args=(run_feature_importance_service,),
-            daemon=True
-        )
-        feature_importance_thread.start()
-        logging.info("Feature importance analysis service started")
-        
-        # Start social risk adjuster service in a separate thread
-        social_risk_thread = threading.Thread(
-            target=run_async_service,
-            args=(run_social_risk_adjuster_service,),
-            daemon=True
-        )
-        social_risk_thread.start()
-        logging.info("Social risk adjuster service started")
-        
-        # Start Monte Carlo simulation service in a separate thread
-        monte_carlo_thread = threading.Thread(
-            target=run_async_service,
-            args=(run_monte_carlo_service,),
-            daemon=True
-        )
-        monte_carlo_thread.start()
-        logging.info("Monte Carlo simulation service started")
-        
-        # Start Neural Network price prediction service in a separate thread
-        neural_network_thread = threading.Thread(
-            target=run_async_service,
-            args=(run_neural_network_service,),
-            daemon=True
-        )
-        neural_network_thread.start()
-        logging.info("Neural Network price prediction service started")
-        
-        # Start Pattern Recognition service in a separate thread
-        pattern_recognition_thread = threading.Thread(
-            target=run_async_service,
-            args=(run_pattern_recognition_service,),
-            daemon=True
-        )
-        pattern_recognition_thread.start()
-        logging.info("Pattern Recognition service started")
-        
-        # Start News Analysis service in a separate thread
-        news_analysis_thread = threading.Thread(
-            target=run_async_service,
-            args=(run_news_analysis_service,),
-            daemon=True
-        )
-        news_analysis_thread.start()
-        logging.info("News Analysis service started")
-        
-        # Start Enhanced Social Monitor service in a separate thread
-        enhanced_social_thread = threading.Thread(
-            target=run_async_service,
-            args=(run_enhanced_social_monitor_service,),
-            daemon=True
-        )
-        enhanced_social_thread.start()
-        logging.info("Enhanced Social Monitor service started")
-        
-        # Start Order Book Analysis service in a separate thread
-        order_book_thread = threading.Thread(
-            target=run_async_service,
-            args=(run_order_book_analysis_service,),
-            daemon=True
-        )
-        order_book_thread.start()
-        logging.info("Order Book Analysis service started")
-        
-        # Start Grid Trading service in a separate thread
-        grid_trading_thread = threading.Thread(
-            target=run_async_service,
-            args=(run_grid_trading_service,),
-            daemon=True
-        )
-        grid_trading_thread.start()
-        logging.info("Grid Trading service started")
-        
-        # Start DCA Strategy service in a separate thread
-        dca_strategy_thread = threading.Thread(
-            target=run_async_service,
-            args=(run_dca_strategy_service,),
-            daemon=True
-        )
-        dca_strategy_thread.start()
-        logging.info("DCA Strategy service started")
-        
-        # Start Arbitrage Detection service in a separate thread
-        arbitrage_thread = threading.Thread(
-            target=run_async_service,
-            args=(run_arbitrage_detection_service,),
-            daemon=True
-        )
-        arbitrage_thread.start()
-        logging.info("Arbitrage Detection service started")
+        # Start each available service in its own thread
+        for svc_key, svc_name, start_method in _SERVICE_REGISTRY:
+            if _optional_services.get(svc_key) is None:
+                logging.info(f"Skipping {svc_name} service (not available)")
+                continue
+            thread = threading.Thread(
+                target=run_async_service,
+                args=(_make_service_runner(svc_key, start_method),),
+                daemon=True
+            )
+            thread.start()
+            logging.info(f"{svc_name} service started")
         
         # Small delay to allow services to initialize
         time.sleep(3)
@@ -1468,7 +1331,12 @@ def main():
         
         # Get strategy selection service instance for status display
         # Note: We only use this for display purposes, as the actual service runs in its own thread
-        strategy_selector = StrategySelectionService()
+        strategy_selector = None
+        if StrategySelectionService is not None:
+            try:
+                strategy_selector = StrategySelectionService()
+            except Exception as e:
+                logging.warning(f"Could not initialize strategy selector for display: {e}")
         
         # Get initial balance
         account = trader.client.get_account()
@@ -1485,7 +1353,10 @@ def main():
         print(f"Max Positions: {trader.config['trading_params']['max_positions']}")
         print(f"Min Volume: ${trader.config['trading_params']['min_volume_usdc']:,}")
         print(f"Position Size: {trader.config['trading_params'].get('position_size', 0.1) * 100}% of available capital")
-        print(f"Strategy Selection: Automated (Market Regime: {strategy_selector.selection_weights['market_regime']:.2f}, Performance: {strategy_selector.selection_weights['historical_performance']:.2f})")
+        if strategy_selector and hasattr(strategy_selector, 'selection_weights'):
+            print(f"Strategy Selection: Automated (Market Regime: {strategy_selector.selection_weights['market_regime']:.2f}, Performance: {strategy_selector.selection_weights['historical_performance']:.2f})")
+        else:
+            print("Strategy Selection: Basic (strategy selection service not available)")
         
         # Start the trader
         trader.start()
