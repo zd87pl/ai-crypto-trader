@@ -332,9 +332,11 @@ class RedisPoolManager:
     
     async def get_stats(self) -> Dict[str, Any]:
         """Get Redis pool statistics"""
+        # Expose config without sensitive fields
+        safe_config = {k: v for k, v in self.config.items() if k != 'password'}
         stats = {
             'mode': 'cluster' if self.is_cluster_mode else 'standalone',
-            'config': self.config,
+            'config': safe_config,
             'health': await self.health_check(),
             'circuit_breaker_stats': {}
         }

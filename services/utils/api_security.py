@@ -12,7 +12,7 @@ import time
 import json
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime, timedelta
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from services.utils.redis_pool import get_redis_pool_manager
 from services.utils.metrics import get_metrics, is_metrics_enabled
@@ -45,9 +45,9 @@ class APIKey:
     created_at: datetime
     last_used: Optional[datetime] = None
     expires_at: Optional[datetime] = None
-    rate_limits: Dict[str, RateLimit] = None
-    allowed_ips: List[str] = None
-    metadata: Dict[str, Any] = None
+    rate_limits: Optional[Dict[str, RateLimit]] = field(default=None)
+    allowed_ips: Optional[List[str]] = field(default=None)
+    metadata: Optional[Dict[str, Any]] = field(default=None)
 
 @dataclass
 class AuthResult:
@@ -71,13 +71,23 @@ class APISecurityManager:
             self.metrics = get_metrics('api_security')
         
         # Security configuration
+        jwt_secret = os.getenv('JWT_SECRET')
+        if not jwt_secret:
+            jwt_secret = self._generate_secret()
+            logger.warning("JWT_SECRET not set - generating ephemeral secret. Tokens will be invalid after restart.")
+
+        encryption_key = os.getenv('ENCRYPTION_KEY')
+        if not encryption_key:
+            encryption_key = Fernet.generate_key().decode()
+            logger.warning("ENCRYPTION_KEY not set - generating ephemeral key. Encrypted data will be unreadable after restart.")
+
         self.config = {
             'key_rotation_interval': int(os.getenv('API_KEY_ROTATION_INTERVAL', 86400)),  # 24 hours
             'key_expiry_days': int(os.getenv('API_KEY_EXPIRY_DAYS', 90)),
             'max_keys_per_user': int(os.getenv('MAX_KEYS_PER_USER', 5)),
             'require_ip_whitelist': os.getenv('REQUIRE_IP_WHITELIST', 'false').lower() == 'true',
-            'jwt_secret': os.getenv('JWT_SECRET', self._generate_secret()),
-            'encryption_key': os.getenv('ENCRYPTION_KEY', Fernet.generate_key().decode()),
+            'jwt_secret': jwt_secret,
+            'encryption_key': encryption_key,
             'audit_log_retention_days': int(os.getenv('AUDIT_LOG_RETENTION_DAYS', 30))
         }
         
@@ -421,11 +431,12 @@ class APISecurityManager:
         try:
             cleaned = 0
             
-            # Get all key IDs
+            # Get all key IDs using SCAN (non-blocking unlike KEYS)
             redis_client = self.redis_pool_manager.get_client()
-            key_pattern = "api_key:*"
-            keys = await redis_client.keys(key_pattern)
-            
+            keys = []
+            async for redis_key in redis_client.scan_iter(match="api_key:*", count=100):
+                keys.append(redis_key)
+
             for redis_key in keys:
                 try:
                     key_data = await redis_client.get(redis_key)
@@ -618,13 +629,14 @@ class APISecurityManager:
             try:
                 await asyncio.sleep(self.config['key_rotation_interval'])
                 
-                # Get all active keys
+                # Get all active keys using SCAN (non-blocking unlike KEYS)
                 redis_client = self.redis_pool_manager.get_client()
-                key_pattern = "api_key:*"
-                keys = await redis_client.keys(key_pattern)
-                
+                keys = []
+                async for redis_key in redis_client.scan_iter(match="api_key:*", count=100):
+                    keys.append(redis_key)
+
                 rotation_threshold = datetime.now() - timedelta(days=30)  # Rotate monthly
-                
+
                 for redis_key in keys:
                     try:
                         key_data = await redis_client.get(redis_key)

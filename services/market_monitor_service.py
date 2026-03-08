@@ -560,10 +560,17 @@ class MarketMonitorService:
                                 # Check for trading opportunities
                                 if abs(indicators['price_change_1m']) >= self.config['trading_params'].get('min_price_change_pct', 0.5) and \
                                    volume >= self.config['trading_params']['min_volume_usdc']:
-                                    await self.redis.publish(
-                                        'trading_opportunities',
-                                        json.dumps(market_update)
-                                    )
+                                    @self.redis_cb
+                                    async def publish_opportunity():
+                                        await self.redis.publish(
+                                            'trading_opportunities',
+                                            json.dumps(market_update)
+                                        )
+
+                                    try:
+                                        await publish_opportunity()
+                                    except CircuitBreakerOpenException:
+                                        logger.warning(f"Redis circuit breaker open, skipping opportunity publish for {symbol}")
                                     logger.info(f"Found opportunity: {symbol} at ${price:.8f} (1m change: {indicators['price_change_1m']:.2f}%)")
                                 
                                 # Record metrics for processing duration

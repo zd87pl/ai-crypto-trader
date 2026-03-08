@@ -6,8 +6,6 @@ ta>=0.7.0
 websockets==10.4
 openai>=1.0.0
 redis>=5.0.0
-aioredis>=2.0.0
-asyncio>=3.4.3
 python-dotenv>=1.0.0
 requests>=2.31.0
 aiohttp>=3.9.0

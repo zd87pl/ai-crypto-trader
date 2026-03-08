@@ -8,10 +8,12 @@ import logging
 from typing import Dict, Any, Optional, Union, List
 from enum import Enum
 from dataclasses import dataclass
+from functools import wraps
 from services.utils.redis_pool import get_redis_pool_manager
 from services.utils.metrics import get_metrics, is_metrics_enabled
 import json
 import hashlib
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +164,7 @@ class RateLimiter:
         if current_requests + cost <= rate_limit.requests:
             # Add current request(s)
             for _ in range(cost):
-                await redis_client.zadd(key, {f"{now}_{id({})}": now})
+                await redis_client.zadd(key, {f"{now}_{uuid.uuid4().hex[:8]}": now})
             
             return RateLimitResult(
                 allowed=True,
@@ -404,8 +406,10 @@ class RateLimiter:
         try:
             redis_client = self.redis_pool_manager.get_client()
             
-            # Find rate limit keys
-            keys = await redis_client.keys("rate_limit:*")
+            # Find rate limit keys using SCAN (non-blocking unlike KEYS)
+            keys = []
+            async for key in redis_client.scan_iter(match="rate_limit:*", count=100):
+                keys.append(key)
             cleaned = 0
             
             for i in range(0, len(keys), batch_size):
@@ -457,16 +461,16 @@ def rate_limit(
         cost: Cost of this operation
     """
     def decorator(func):
+        @wraps(func)
         async def async_wrapper(*args, **kwargs):
             # Get identifier
             if identifier_func:
                 identifier = identifier_func(*args, **kwargs)
             else:
                 identifier = 'default'
-            
-            # Get rate limiter
-            limiter = RateLimiter()
-            await limiter.initialize()
+
+            # Get global rate limiter singleton
+            limiter = await get_rate_limiter()
             
             # Check rate limit
             result = await limiter.check_limit(identifier, endpoint, rate_limit_config, cost)
@@ -485,6 +489,7 @@ def rate_limit(
             
             return await func(*args, **kwargs)
         
+        @wraps(func)
         def sync_wrapper(*args, **kwargs):
             # For sync functions, we'd need to handle differently
             # For now, just call the function
