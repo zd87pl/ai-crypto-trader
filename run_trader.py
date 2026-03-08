@@ -984,7 +984,9 @@ def print_status(trader, strategy_selector=None):
                     
         if not grid_info_shown and not performance_json:
             print("No grid trading data available yet")
-            
+    except Exception as e:
+        pass  # Silently ignore any errors here
+
     # Print DCA strategy information
     try:
         print("\nDCA Strategy Status:")

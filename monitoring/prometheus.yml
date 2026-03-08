@@ -27,22 +27,22 @@ scrape_configs:
 
   - job_name: "social-monitor"
     static_configs:
-      - targets: ["social-monitor:${SOCIAL_MONITOR_PORT}"]
+      - targets: ["social-monitor:8005"]
     metrics_path: /metrics
 
   - job_name: "ai-analyzer"
     static_configs:
-      - targets: ["ai-analyzer:${AI_ANALYZER_PORT}"]
+      - targets: ["ai-analyzer:8003"]
     metrics_path: /metrics
 
   - job_name: "trade-executor"
     static_configs:
-      - targets: ["trade-executor:${TRADE_EXECUTOR_PORT}"]
+      - targets: ["trade-executor:8002"]
     metrics_path: /metrics
 
   - job_name: "strategy-evolution"
     static_configs:
-      - targets: ["strategy-evolution:${STRATEGY_EVOLUTION_PORT}"]
+      - targets: ["strategy-evolution:8004"]
     metrics_path: /metrics
 
   - job_name: "dashboard"
@@ -52,7 +52,7 @@ scrape_configs:
 
   - job_name: "redis"
     static_configs:
-      - targets: ["redis:6379"]
+      - targets: ["redis-exporter:9121"]
     metrics_path: /metrics
 
   - job_name: "node-exporter"

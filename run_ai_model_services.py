@@ -7,6 +7,9 @@ import logging as logger
 from typing import Dict, List
 from datetime import datetime
 
+# Ensure logs directory exists before configuring file handler
+os.makedirs('logs', exist_ok=True)
+
 # Configure logging
 logger.basicConfig(
     level=logger.INFO,
@@ -81,9 +84,6 @@ def setup_parser() -> argparse.ArgumentParser:
     return parser
 
 def main():
-    # Ensure logs directory exists
-    os.makedirs('logs', exist_ok=True)
-    
     # Parse command line arguments
     parser = setup_parser()
     args = parser.parse_args()
