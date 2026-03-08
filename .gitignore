@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.log
+logs/
+data/
+models/
+strategies/
+explanations/
+backtesting/data/
+backtesting/results/
+backtesting/plots/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
