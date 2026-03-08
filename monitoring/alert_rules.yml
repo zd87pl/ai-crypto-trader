@@ -43,8 +43,8 @@ groups:
 
       # Market Data Alerts
       - alert: StaleMarketData
-        expr: time() - crypto_trader_market_data_updates_total > 300
-        for: 1m
+        expr: rate(crypto_trader_market_data_updates_total[5m]) == 0
+        for: 5m
         labels:
           severity: critical
         annotations:

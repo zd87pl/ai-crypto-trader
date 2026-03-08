@@ -4,6 +4,7 @@ Provides real-time visibility into circuit breaker states and statistics
 """
 import json
 import asyncio
+import time
 from aiohttp import web
 from services.utils.circuit_breaker import get_all_circuit_breakers
 from services.utils.metrics import get_metrics, is_metrics_enabled
@@ -53,7 +54,7 @@ class CircuitBreakerMonitor:
             return web.json_response({
                 'circuit_breakers': stats,
                 'total_count': len(stats),
-                'timestamp': asyncio.get_event_loop().time()
+                'timestamp': time.time()
             })
         except Exception as e:
             logger.error(f"Error getting circuit breaker stats: {e}")
